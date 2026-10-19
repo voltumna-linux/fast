@@ -1,0 +1,42 @@
+Upstream-Status: Inappropriate
+
+Subject: [PATCH] memcg: Leave isolated CPUs' stocks alone in drain_all_stock()
+
+drain_all_stock() reads the stocks of every online CPU and sets
+FLUSHING_CACHED_CHARGE before it finds out that an isolated CPU is not
+going to be drained.  The bit then stays set for good, and every later
+drain pulls the isolated CPU's cachelines for nothing.
+
+Skip isolated CPUs before looking at their stocks.  What they cache
+stays there, as it does today.
+---
+--- a/mm/memcontrol.c
++++ b/mm/memcontrol.c
+@@ -1994,13 +1994,17 @@ void drain_all_stock(struct mem_cgroup *root_memcg)
+ 		struct memcg_stock_pcp *memcg_st = &per_cpu(memcg_stock, cpu);
+ 		struct obj_stock_pcp *obj_st = &per_cpu(obj_stock, cpu);
+ 
++		/* Isolated CPUs are not drained remotely */
++		if (cpu != curcpu && cpu_is_isolated(cpu))
++			continue;
++
+ 		if (!test_bit(FLUSHING_CACHED_CHARGE, &memcg_st->flags) &&
+ 		    is_memcg_drain_needed(memcg_st, root_memcg) &&
+ 		    !test_and_set_bit(FLUSHING_CACHED_CHARGE,
+ 				      &memcg_st->flags)) {
+ 			if (cpu == curcpu)
+ 				drain_local_memcg_stock(&memcg_st->work);
+-			else if (!cpu_is_isolated(cpu))
++			else
+ 				schedule_work_on(cpu, &memcg_st->work);
+ 		}
+ 
+@@ -2010,7 +2014,7 @@ void drain_all_stock(struct mem_cgroup *root_memcg)
+ 				      &obj_st->flags)) {
+ 			if (cpu == curcpu)
+ 				drain_local_obj_stock(&obj_st->work);
+-			else if (!cpu_is_isolated(cpu))
++			else
+ 				schedule_work_on(cpu, &obj_st->work);
+ 		}
+ 	}
