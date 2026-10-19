@@ -1,0 +1,25 @@
+Upstream-Status: Inappropriate
+
+Subject: [PATCH] sched/fair: Skip unchanged unlimited bandwidth updates
+
+systemd writes "max 100000" to cpu.max of every unit with the cpu
+controller.  tg_set_cfs_bandwidth() then takes the runqueue lock of every
+online CPU to rewrite runtime_enabled and runtime_remaining, although
+nothing changes.
+
+Return early when the bandwidth stays unlimited with the same period and
+burst.
+---
+--- a/kernel/sched/core.c
++++ b/kernel/sched/core.c
+@@ -9582,6 +9582,10 @@ static int tg_set_cfs_bandwidth(struct task_group *tg,
+ 	ret = __cfs_schedulable(tg, period, quota);
+ 	if (ret)
+ 		return ret;
++
++	if (quota == RUNTIME_INF && cfs_b->quota == RUNTIME_INF &&
++	    ktime_to_ns(cfs_b->period) == period && cfs_b->burst == burst)
++		return 0;
+ 
+ 	runtime_enabled = quota != RUNTIME_INF;
+ 	runtime_was_enabled = cfs_b->quota != RUNTIME_INF;

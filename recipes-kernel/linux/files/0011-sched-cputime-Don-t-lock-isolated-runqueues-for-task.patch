@@ -1,0 +1,52 @@
+Upstream-Status: Inappropriate
+
+Subject: [PATCH] sched/cputime: Don't lock isolated runqueues for task stats
+
+For a task running on a nohz_full CPU, task_cputime_adjusted() calls
+task_sched_runtime(), which locks that CPU's runqueue, updates its clock
+and the task's runtime, and may send it a reschedule IPI.  Reading
+/proc/<pid>/task/*/stat, as ps -L does, does that to every isolated CPU
+running a thread.
+
+With isolcpus=cputime, take the runtime from vtime on isolated CPUs; it
+is already up to date there.
+---
+--- a/include/linux/sched/isolation.h
++++ b/include/linux/sched/isolation.h
+@@ -28,6 +28,7 @@ enum hk_type {
+ enum isol_strict {
+ 	ISOL_STRICT_PCPU,
+ 	ISOL_STRICT_STACK,
++	ISOL_STRICT_CPUTIME,
+ 	ISOL_STRICT_MAX
+ };
+ 
+--- a/kernel/sched/cputime.c
++++ b/kernel/sched/cputime.c
+@@ -627,8 +627,14 @@ void task_cputime_adjusted(struct task_struct *p, u64 *ut, u64 *st)
+ 		.sum_exec_runtime = p->se.sum_exec_runtime,
+ 	};
+ 
+-	if (task_cputime(p, &cputime.utime, &cputime.stime))
+-		cputime.sum_exec_runtime = task_sched_runtime(p);
++	if (task_cputime(p, &cputime.utime, &cputime.stime)) {
++		/* vtime is up to date, don't lock an isolated CPU's runqueue */
++		if (cpu_is_isolated_strict(task_cpu(p), ISOL_STRICT_CPUTIME))
++			cputime.sum_exec_runtime = max(cputime.sum_exec_runtime,
++						       cputime.utime + cputime.stime);
++		else
++			cputime.sum_exec_runtime = task_sched_runtime(p);
++	}
+ 	cputime_adjust(&cputime, &p->prev_cputime, ut, st);
+ }
+ EXPORT_SYMBOL_GPL(task_cputime_adjusted);
+--- a/kernel/sched/isolation.c
++++ b/kernel/sched/isolation.c
+@@ -29,6 +29,7 @@ static struct housekeeping housekeeping;
+ unsigned long isolcpus_strict __ro_after_init;
+ 
+ static const char * const isolcpus_strict_names[ISOL_STRICT_MAX] = {
++	[ISOL_STRICT_CPUTIME]	= "cputime",
+ 	[ISOL_STRICT_STACK]	= "stack",
+ 	[ISOL_STRICT_PCPU]	= "pcpu",
+ };

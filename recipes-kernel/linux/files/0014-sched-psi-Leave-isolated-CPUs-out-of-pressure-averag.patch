@@ -1,0 +1,43 @@
+Upstream-Status: Inappropriate
+
+Subject: [PATCH] sched/psi: Leave isolated CPUs out of pressure averages
+
+collect_percpu_times() reads every possible CPU's psi_group_cpu and
+writes back times_prev, every two seconds for each active group.  A busy
+isolated CPU keeps that work armed forever, and each run pulls the
+isolated CPUs' cachelines to a housekeeping CPU.
+
+With isolcpus=psi, skip isolated CPUs; their stalls are not reported.
+---
+--- a/include/linux/sched/isolation.h
++++ b/include/linux/sched/isolation.h
+@@ -31,6 +31,7 @@ enum isol_strict {
+ 	ISOL_STRICT_CPUTIME,
+ 	ISOL_STRICT_LRU,
+ 	ISOL_STRICT_PCP,
++	ISOL_STRICT_PSI,
+ 	ISOL_STRICT_MAX
+ };
+ 
+--- a/kernel/sched/isolation.c
++++ b/kernel/sched/isolation.c
+@@ -29,6 +29,7 @@ static struct housekeeping housekeeping;
+ unsigned long isolcpus_strict __ro_after_init;
+ 
+ static const char * const isolcpus_strict_names[ISOL_STRICT_MAX] = {
++	[ISOL_STRICT_PSI]	= "psi",
+ 	[ISOL_STRICT_PCP]	= "pcp",
+ 	[ISOL_STRICT_LRU]	= "lru",
+ 	[ISOL_STRICT_CPUTIME]	= "cputime",
+--- a/kernel/sched/psi.c
++++ b/kernel/sched/psi.c
+@@ -381,6 +381,9 @@ static void collect_percpu_times(struct psi_group *group,
+ 		u32 times[NR_PSI_STATES];
+ 		u32 nonidle;
+ 		u32 cpu_changed_states;
++
++		if (cpu_is_isolated_strict(cpu, ISOL_STRICT_PSI))
++			continue;
+ 
+ 		get_recent_times(group, cpu, aggregator, times,
+ 				&cpu_changed_states);

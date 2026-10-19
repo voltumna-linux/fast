@@ -1,0 +1,78 @@
+Upstream-Status: Inappropriate
+
+Subject: [PATCH] x86/mm: Keep housekeeping processes off broadcast TLB flushes with isolcpus=asid
+
+A process active on four or more CPUs gets a global ASID, and from then
+on its TLB flushes are INVLPGB broadcasts: every CPU in the system,
+isolated ones included, invalidates, and the flushing CPU waits in
+TLBSYNC for all of them (twice on CPUs with erratum #1718).  Processes
+that never run on an isolated CPU do not need to reach it at all.
+
+With isolcpus=asid, a process whose mm_cpumask() has only housekeeping
+CPUs does not get a global ASID: its flushes go by IPI to those CPUs.
+A process that also runs on isolated CPUs still can, so its flushes
+reach them without an interrupt.  Kernel flushes keep using INVLPGB.
+---
+--- a/include/linux/sched/isolation.h
++++ b/include/linux/sched/isolation.h
+@@ -32,6 +32,7 @@
+ 	ISOL_STRICT_LRU,
+ 	ISOL_STRICT_PCP,
+ 	ISOL_STRICT_PSI,
++	ISOL_STRICT_ASID,
+ 	ISOL_STRICT_MAX
+ };
+ 
+@@ -103,4 +104,14 @@
+ 	return false;
+ }
+ 
++/* For choices that do not depend on one CPU */
++static inline bool isolcpus_strict_enabled(enum isol_strict flag)
++{
++#ifdef CONFIG_CPU_ISOLATION
++	return test_bit(flag, &isolcpus_strict);
++#else
++	return false;
++#endif
++}
++
+ #endif /* _LINUX_SCHED_ISOLATION_H */
+--- a/kernel/sched/isolation.c
++++ b/kernel/sched/isolation.c
+@@ -29,6 +29,7 @@
+ unsigned long isolcpus_strict __ro_after_init;
+ 
+ static const char * const isolcpus_strict_names[ISOL_STRICT_MAX] = {
++	[ISOL_STRICT_ASID]	= "asid",
+ 	[ISOL_STRICT_PSI]	= "psi",
+ 	[ISOL_STRICT_PCP]	= "pcp",
+ 	[ISOL_STRICT_LRU]	= "lru",
+--- a/arch/x86/mm/tlb.c
++++ b/arch/x86/mm/tlb.c
+@@ -12,6 +12,7 @@
+ #include <linux/task_work.h>
+ #include <linux/mmu_notifier.h>
+ #include <linux/mmu_context.h>
++#include <linux/sched/isolation.h>
+ 
+ #include <asm/tlbflush.h>
+ #include <asm/mmu_context.h>
+@@ -452,6 +453,17 @@
+ 		return;
+ 
+ 	/*
++	 * With isolcpus=asid, a process that only runs on housekeeping CPUs
++	 * keeps per-CPU ASIDs: its flushes go by IPI to those CPUs instead of
++	 * a broadcast INVLPGB that every CPU, isolated ones included, has to
++	 * take.  A process that also runs on isolated CPUs can still get a
++	 * global ASID, which reaches them without an interrupt.
++	 */
++	if (isolcpus_strict_enabled(ISOL_STRICT_ASID) &&
++	    cpumask_subset(mm_cpumask(mm), housekeeping_cpumask(HK_TYPE_DOMAIN)))
++		return;
++
++	/*
+ 	 * Assign a global ASID if the process is active on
+ 	 * 4 or more CPUs simultaneously.
+ 	 */

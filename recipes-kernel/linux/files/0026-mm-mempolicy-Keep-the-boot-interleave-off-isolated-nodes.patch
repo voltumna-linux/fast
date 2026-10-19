@@ -1,0 +1,139 @@
+Upstream-Status: Inappropriate
+
+Subject: [PATCH] mm/mempolicy: Keep the boot interleave off isolated nodes with isolcpus=node
+
+numa_policy_init() makes the boot task interleave its allocations over
+every node with at least 16 MB, and init inherits the policy until it
+is about to exec the first user program.  The large system hashes, the
+slab pages allocated in that window and the network devices registered
+then, lo among them, end up spread over all nodes, and the housekeeping
+CPUs use them for the life of the system.
+
+On a two-socket machine whose second socket is isolated, half of that
+lands in the isolated CPUs' memory.  With IBS on the housekeeping CPUs,
+a loopback socket load had its remote accesses in the lo net_device, on
+a node of the isolated socket.
+
+Add isolcpus=node.  At boot it records the nodes whose present CPUs are
+all isolated, and numa_policy_init() leaves them out of the interleave.
+Nodes without CPUs are interleaved as before.  What the isolated CPUs
+themselves get allocated in that window without a node, such as their
+cpuidle devices, now lands on housekeeping nodes, where half of it was
+before.
+---
+--- a/include/linux/sched/isolation.h
++++ b/include/linux/sched/isolation.h
+@@ -33,12 +33,14 @@
+ 	ISOL_STRICT_PCP,
+ 	ISOL_STRICT_PSI,
+ 	ISOL_STRICT_ASID,
++	ISOL_STRICT_NODE,
+ 	ISOL_STRICT_MAX
+ };
+ 
+ #ifdef CONFIG_CPU_ISOLATION
+ DECLARE_STATIC_KEY_FALSE(housekeeping_overridden);
+ extern unsigned long isolcpus_strict;
++extern nodemask_t isolcpus_strict_nodes;
+ extern int housekeeping_any_cpu(enum hk_type type);
+ extern const struct cpumask *housekeeping_cpumask(enum hk_type type);
+ extern bool housekeeping_enabled(enum hk_type type);
+@@ -114,4 +116,14 @@
+ #endif
+ }
+ 
++/* With isolcpus=node: does @node have CPUs, all of them isolated? */
++static inline bool node_is_isolated_strict(int node)
++{
++#ifdef CONFIG_CPU_ISOLATION
++	return node_isset(node, isolcpus_strict_nodes);
++#else
++	return false;
++#endif
++}
++
+ #endif /* _LINUX_SCHED_ISOLATION_H */
+--- a/kernel/sched/isolation.c
++++ b/kernel/sched/isolation.c
+@@ -27,8 +27,10 @@
+ static struct housekeeping housekeeping;
+ 
+ unsigned long isolcpus_strict __ro_after_init;
++nodemask_t isolcpus_strict_nodes __ro_after_init;
+ 
+ static const char * const isolcpus_strict_names[ISOL_STRICT_MAX] = {
++	[ISOL_STRICT_NODE]	= "node",
+ 	[ISOL_STRICT_ASID]	= "asid",
+ 	[ISOL_STRICT_PSI]	= "psi",
+ 	[ISOL_STRICT_PCP]	= "pcp",
+@@ -96,6 +98,29 @@
+ }
+ EXPORT_SYMBOL_GPL(housekeeping_test_cpu);
+ 
++/* isolcpus=node: the nodes whose present CPUs are all isolated */
++static void __init isolcpus_strict_init_nodes(void)
++{
++	nodemask_t hk_nodes = NODE_MASK_NONE;
++	int cpu, nid;
++
++	for_each_present_cpu(cpu) {
++		nid = cpu_to_node(cpu);
++		if (nid == NUMA_NO_NODE)
++			continue;
++		if (cpu_is_isolated_strict(cpu, ISOL_STRICT_NODE))
++			node_set(nid, isolcpus_strict_nodes);
++		else
++			node_set(nid, hk_nodes);
++	}
++	nodes_andnot(isolcpus_strict_nodes, isolcpus_strict_nodes, hk_nodes);
++	if (nodes_empty(isolcpus_strict_nodes))
++		pr_warn("isolcpus: Flag node set, but no node has only isolated CPUs\n");
++	else
++		pr_info("isolcpus: Nodes with only isolated CPUs: %*pbl\n",
++			nodemask_pr_args(&isolcpus_strict_nodes));
++}
++
+ void __init housekeeping_init(void)
+ {
+ 	enum hk_type type;
+@@ -112,6 +137,9 @@
+ 		/* We need at least one CPU to handle housekeeping work */
+ 		WARN_ON_ONCE(cpumask_empty(housekeeping.cpumasks[type]));
+ 	}
++
++	if (isolcpus_strict_enabled(ISOL_STRICT_NODE))
++		isolcpus_strict_init_nodes();
+ }
+ 
+ static void __init housekeeping_setup_type(enum hk_type type,
+--- a/mm/mempolicy.c
++++ b/mm/mempolicy.c
+@@ -86,6 +86,7 @@
+ #include <linux/sched/mm.h>
+ #include <linux/sched/numa_balancing.h>
+ #include <linux/sched/task.h>
++#include <linux/sched/isolation.h>
+ #include <linux/nodemask.h>
+ #include <linux/cpuset.h>
+ #include <linux/slab.h>
+@@ -3287,6 +3288,10 @@
+ 	 * Set interleaving policy for system init. Interleaving is only
+ 	 * enabled across suitably sized nodes (default is >= 16MB), or
+ 	 * fall back to the largest node if they're all smaller.
++	 *
++	 * With isolcpus=node, nodes whose CPUs are all isolated are left
++	 * out: what init allocates (system hashes, slabs, network devices)
++	 * is used by the housekeeping CPUs for the life of the system.
+ 	 */
+ 	nodes_clear(interleave_nodes);
+ 	for_each_node_state(nid, N_MEMORY) {
+@@ -3299,7 +3304,8 @@
+ 		}
+ 
+ 		/* Interleave this node? */
+-		if ((total_pages << PAGE_SHIFT) >= (16 << 20))
++		if ((total_pages << PAGE_SHIFT) >= (16 << 20) &&
++		    !node_is_isolated_strict(nid))
+ 			node_set(nid, interleave_nodes);
+ 	}
+ 

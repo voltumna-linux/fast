@@ -1,0 +1,26 @@
+Upstream-Status: Inappropriate
+
+Subject: [PATCH] mm/vmstat: Don't dirty idle per-cpu NUMA counters when folding
+
+fold_vm_zone_numa_events() does an xchg() on every NUMA event counter of
+every online CPU and zone, each time /proc/vmstat or a node's numastat is
+read.  CPUs that did not allocate since the last fold get their
+cachelines written for nothing.
+
+Only xchg() counters that are not zero.
+---
+--- a/mm/vmstat.c
++++ b/mm/vmstat.c
+@@ -179,8 +179,11 @@ static void fold_vm_zone_numa_events(struct zone *zone)
+ 		struct per_cpu_zonestat *pzstats;
+ 
+ 		pzstats = per_cpu_ptr(zone->per_cpu_zonestats, cpu);
+-		for (item = 0; item < NR_VM_NUMA_EVENT_ITEMS; item++)
++		for (item = 0; item < NR_VM_NUMA_EVENT_ITEMS; item++) {
++			if (!READ_ONCE(pzstats->vm_numa_event[item]))
++				continue;
+ 			zone_numa_events[item] += xchg(&pzstats->vm_numa_event[item], 0);
++		}
+ 	}
+ 
+ 	for (item = 0; item < NR_VM_NUMA_EVENT_ITEMS; item++)

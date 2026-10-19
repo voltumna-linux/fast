@@ -1,0 +1,105 @@
+Upstream-Status: Inappropriate
+
+Subject: [PATCH] mm/swap: Don't batch LRU folios on isolated CPUs
+
+Folios left in an isolated CPU's LRU batches make lru_add_drain_all()
+queue work on that CPU: a kworker preempting the isolated task, and on a
+nohz_full CPU the tick coming back.
+
+With isolcpus=lru, isolated CPUs put folios on the LRU right away, as all
+CPUs do while the LRU cache is disabled, so there is never anything to
+drain there.  fs/buffer.c already keeps its per-cpu LRU empty on isolated
+CPUs.
+---
+--- a/include/linux/sched/isolation.h
++++ b/include/linux/sched/isolation.h
+@@ -29,6 +29,7 @@ enum isol_strict {
+ 	ISOL_STRICT_PCPU,
+ 	ISOL_STRICT_STACK,
+ 	ISOL_STRICT_CPUTIME,
++	ISOL_STRICT_LRU,
+ 	ISOL_STRICT_MAX
+ };
+ 
+--- a/kernel/sched/isolation.c
++++ b/kernel/sched/isolation.c
+@@ -29,6 +29,7 @@ static struct housekeeping housekeeping;
+ unsigned long isolcpus_strict __ro_after_init;
+ 
+ static const char * const isolcpus_strict_names[ISOL_STRICT_MAX] = {
++	[ISOL_STRICT_LRU]	= "lru",
+ 	[ISOL_STRICT_CPUTIME]	= "cputime",
+ 	[ISOL_STRICT_STACK]	= "stack",
+ 	[ISOL_STRICT_PCPU]	= "pcpu",
+--- a/mm/internal.h
++++ b/mm/internal.h
+@@ -441,6 +441,7 @@ void folio_rotate_reclaimable(struct folio *folio);
+ bool __folio_end_writeback(struct folio *folio);
+ void deactivate_file_folio(struct folio *folio);
+ void folio_activate(struct folio *folio);
++bool lru_batch_disabled(void);
+ 
+ void free_pgtables(struct mmu_gather *tlb, struct ma_state *mas,
+ 		   struct vm_area_struct *start_vma, unsigned long floor,
+--- a/mm/mlock.c
++++ b/mm/mlock.c
+@@ -255,7 +255,7 @@ void mlock_folio(struct folio *folio)
+ 
+ 	folio_get(folio);
+ 	if (!folio_batch_add(fbatch, mlock_lru(folio)) ||
+-	    !folio_may_be_lru_cached(folio) || lru_cache_disabled())
++	    !folio_may_be_lru_cached(folio) || lru_batch_disabled())
+ 		mlock_folio_batch(fbatch);
+ 	local_unlock(&mlock_fbatch.lock);
+ }
+@@ -278,7 +278,7 @@ void mlock_new_folio(struct folio *folio)
+ 
+ 	folio_get(folio);
+ 	if (!folio_batch_add(fbatch, mlock_new(folio)) ||
+-	    !folio_may_be_lru_cached(folio) || lru_cache_disabled())
++	    !folio_may_be_lru_cached(folio) || lru_batch_disabled())
+ 		mlock_folio_batch(fbatch);
+ 	local_unlock(&mlock_fbatch.lock);
+ }
+@@ -299,7 +299,7 @@ void munlock_folio(struct folio *folio)
+ 	 */
+ 	folio_get(folio);
+ 	if (!folio_batch_add(fbatch, folio) ||
+-	    !folio_may_be_lru_cached(folio) || lru_cache_disabled())
++	    !folio_may_be_lru_cached(folio) || lru_batch_disabled())
+ 		mlock_folio_batch(fbatch);
+ 	local_unlock(&mlock_fbatch.lock);
+ }
+--- a/mm/swap.c
++++ b/mm/swap.c
+@@ -16,6 +16,7 @@
+ 
+ #include <linux/mm.h>
+ #include <linux/sched.h>
++#include <linux/sched/isolation.h>
+ #include <linux/kernel_stat.h>
+ #include <linux/swap.h>
+ #include <linux/mman.h>
+@@ -43,6 +44,13 @@
+ #define CREATE_TRACE_POINTS
+ #include <trace/events/pagemap.h>
+ 
++/* Called with the per-cpu batch locked, so the CPU can't change under us */
++bool lru_batch_disabled(void)
++{
++	return lru_cache_disabled() ||
++	       cpu_is_isolated_strict(smp_processor_id(), ISOL_STRICT_LRU);
++}
++
+ /* How many pages do we try to swap or page in/out together? As a power of 2 */
+ int page_cluster;
+ static const int page_cluster_max = 31;
+@@ -192,7 +200,7 @@ static void __folio_batch_add_and_move(struct folio_batch __percpu *fb
+ 		local_lock(&cpu_fbatches.lock);
+ 
+ 	if (!folio_batch_add(this_cpu_ptr(fbatch), folio) ||
+-			!folio_may_be_lru_cached(folio) || lru_cache_disabled())
++			!folio_may_be_lru_cached(folio) || lru_batch_disabled())
+ 		folio_batch_move_lru(this_cpu_ptr(fbatch), move_fn);
+ 
+ 	if (disable_irq)

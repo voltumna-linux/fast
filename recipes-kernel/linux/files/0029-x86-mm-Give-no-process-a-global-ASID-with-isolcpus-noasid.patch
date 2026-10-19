@@ -1,0 +1,60 @@
+Upstream-Status: Inappropriate
+
+Subject: [PATCH] x86/mm: Give no process a global ASID with isolcpus=noasid
+
+A process gets a global ASID when one of its flushes finds it active on
+four or more CPUs, and from then on its TLB flushes are INVLPGB
+broadcasts: every CPU in the system, isolated ones included, takes the
+invalidation, and the flushing CPU waits in TLBSYNC for all of them
+(twice on CPUs with erratum #1718).  isolcpus=asid keeps the processes
+that run only on housekeeping CPUs off this path, but a process that
+also runs on isolated CPUs keeps it, and each of its flushes reaches all
+the other isolated CPUs, those that run other processes among them,
+without an interrupt to count.
+
+With isolcpus=noasid no process gets a global ASID: its flushes are IPIs
+to the CPUs that have it loaded (and, at most once a second, to the
+stale CPUs of its mm_cpumask()), never to the CPUs of other processes.
+The cost falls on the process itself: one that flushes while it runs on
+isolated CPUs now interrupts them, where the broadcast did not.  Kernel
+flushes and the batched flushes of reclaim and migration keep using
+INVLPGB.
+---
+--- a/include/linux/sched/isolation.h
++++ b/include/linux/sched/isolation.h
+@@ -34,6 +34,7 @@
+ 	ISOL_STRICT_PSI,
+ 	ISOL_STRICT_ASID,
+ 	ISOL_STRICT_NODE,
++	ISOL_STRICT_NOASID,
+ 	ISOL_STRICT_MAX
+ };
+ 
+--- a/kernel/sched/isolation.c
++++ b/kernel/sched/isolation.c
+@@ -30,6 +30,7 @@
+ nodemask_t isolcpus_strict_nodes __ro_after_init;
+ 
+ static const char * const isolcpus_strict_names[ISOL_STRICT_MAX] = {
++	[ISOL_STRICT_NOASID]	= "noasid",
+ 	[ISOL_STRICT_NODE]	= "node",
+ 	[ISOL_STRICT_ASID]	= "asid",
+ 	[ISOL_STRICT_PSI]	= "psi",
+--- a/arch/x86/mm/tlb.c
++++ b/arch/x86/mm/tlb.c
+@@ -448,6 +448,15 @@
+ 	if (!cpu_feature_enabled(X86_FEATURE_INVLPGB))
+ 		return;
+ 
++	/*
++	 * With isolcpus=noasid, no process gets a global ASID: its flushes go
++	 * by IPI to the CPUs in its mm_cpumask(), the ones that run it, and
++	 * not by a broadcast INVLPGB that every CPU in the system has to take,
++	 * including those that run other processes.
++	 */
++	if (isolcpus_strict_enabled(ISOL_STRICT_NOASID))
++		return;
++
+ 	/* Check every once in a while. */
+ 	if ((current->pid & 0x1f) != (jiffies & 0x1f))
+ 		return;

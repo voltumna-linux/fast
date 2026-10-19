@@ -1,0 +1,70 @@
+Upstream-Status: Inappropriate
+
+Subject: [PATCH] percpu: Allocate isolated CPUs' percpu pages on the allocating node
+
+Dynamic percpu pages come from each CPU's own node.  Isolated CPUs barely
+touch their units, while housekeeping CPUs keep writing and summing them:
+alloc_percpu() clears every unit, percpu_counter_sum() and cgroup rstat
+walk them.  With a whole socket isolated, every fork then moves cachelines
+homed on the isolated socket between two housekeeping CPUs.
+
+With isolcpus=pcpu, take the isolated CPUs' pages from the allocating
+CPU's node instead.  Isolated CPUs pay a remote access when they do use
+their dynamic percpu data.  The first chunk is left alone.
+---
+--- a/include/linux/sched/isolation.h
++++ b/include/linux/sched/isolation.h
+@@ -26,6 +26,7 @@ enum hk_type {
+ 
+ /* Opt-in isolcpus= flags: keep housekeeping off isolated CPUs' memory */
+ enum isol_strict {
++	ISOL_STRICT_PCPU,
+ 	ISOL_STRICT_MAX
+ };
+ 
+--- a/kernel/sched/isolation.c
++++ b/kernel/sched/isolation.c
+@@ -29,6 +29,7 @@ static struct housekeeping housekeeping;
+ unsigned long isolcpus_strict __ro_after_init;
+ 
+ static const char * const isolcpus_strict_names[ISOL_STRICT_MAX] = {
++	[ISOL_STRICT_PCPU]	= "pcpu",
+ };
+ 
+ bool housekeeping_enabled(enum hk_type type)
+--- a/mm/percpu-vm.c
++++ b/mm/percpu-vm.c
+@@ -84,15 +84,21 @@ static int pcpu_alloc_pages(struct pcpu_chunk *chunk,
+ 			    gfp_t gfp)
+ {
+ 	unsigned int cpu, tcpu;
+-	int i;
++	int i, nid;
+ 
+ 	gfp |= __GFP_HIGHMEM;
+ 
+ 	for_each_possible_cpu(cpu) {
++		/* Isolated CPUs' units are mostly touched by housekeeping */
++		if (cpu_is_isolated_strict(cpu, ISOL_STRICT_PCPU))
++			nid = NUMA_NO_NODE;
++		else
++			nid = cpu_to_node(cpu);
++
+ 		for (i = page_start; i < page_end; i++) {
+ 			struct page **pagep = &pages[pcpu_page_idx(cpu, i)];
+ 
+-			*pagep = alloc_pages_node(cpu_to_node(cpu), gfp, 0);
++			*pagep = alloc_pages_node(nid, gfp, 0);
+ 			if (!*pagep)
+ 				goto err;
+ 		}
+--- a/mm/percpu.c
++++ b/mm/percpu.c
+@@ -85,6 +85,7 @@
+ #include <linux/workqueue.h>
+ #include <linux/kmemleak.h>
+ #include <linux/sched.h>
++#include <linux/sched/isolation.h>
+ #include <linux/sched/mm.h>
+ #include <linux/memcontrol.h>
+ 

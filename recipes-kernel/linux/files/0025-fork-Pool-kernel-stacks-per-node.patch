@@ -1,0 +1,113 @@
+Upstream-Status: Inappropriate
+
+Subject: [PATCH] fork: Pool kernel stacks per node
+
+The shared stack pool only keeps stacks whose pages are local to the CPU
+freeing them.  On a housekeeping socket made of several NUMA nodes a task
+often exits on another node than the one it was forked on, and its stack
+is then vfree()d.  Under a fork-heavy load the lazy vmap list fills up
+again and again, and each purge is one flush_tlb_kernel_range() over the
+union of the freed areas: a full TLB flush of every CPU, isolated ones
+included.
+
+Keep one pool per node instead, and put a stack in the pool of the node
+of its pages, whichever CPU frees it.  A fork takes a stack from the pool
+of the node it asks for, so stacks stay local and are reused instead of
+freed.
+---
+--- a/kernel/fork.c
++++ b/kernel/fork.c
+@@ -199,11 +199,14 @@
+ #define NR_CACHED_STACKS 2
+ static DEFINE_PER_CPU(struct vm_struct *, cached_stacks[NR_CACHED_STACKS]);
+ 
+-/* Stacks freed on one CPU and needed on another */
+-#define NR_POOLED_STACKS 64
+-static struct vm_struct *pooled_stacks[NR_POOLED_STACKS];
+-static unsigned int nr_pooled_stacks;
+-static DEFINE_RAW_SPINLOCK(stack_pool_lock);
++/* Stacks freed on one CPU and needed on another, pooled by the node of their pages */
++#define NR_POOLED_STACKS 256
++struct stack_pool {
++	raw_spinlock_t lock;
++	unsigned int nr;
++	struct vm_struct *stacks[NR_POOLED_STACKS];
++};
++static struct stack_pool *stack_pools[MAX_NUMNODES] __ro_after_init;
+ 
+ /*
+  * Allocated stacks are cached and later reused by new threads, so memcg
+@@ -219,6 +222,7 @@
+ 
+ static bool try_release_thread_stack_to_cache(struct vm_struct *vm_area)
+ {
++	struct stack_pool *pool;
+ 	unsigned int i;
+ 
+ 	/* nohz_full implies rcu_nocbs: the RCU callback runs on housekeeping */
+@@ -233,19 +237,25 @@
+ 			return true;
+ 	}
+ 
+-	/* Only pool stacks that are local to the CPU freeing them */
+-	if (page_to_nid(vm_area->pages[0]) != numa_node_id())
++	/*
++	 * Pool the stack on the node of its pages, whichever CPU frees it: a
++	 * stack that is vfree()d instead ends in a vmap purge, which flushes
++	 * the TLB of every CPU, isolated ones included.
++	 */
++	pool = stack_pools[page_to_nid(vm_area->pages[0])];
++	if (!pool)
+ 		return false;
+ 
+-	guard(raw_spinlock_irqsave)(&stack_pool_lock);
+-	if (nr_pooled_stacks == NR_POOLED_STACKS)
++	guard(raw_spinlock_irqsave)(&pool->lock);
++	if (pool->nr == NR_POOLED_STACKS)
+ 		return false;
+-	pooled_stacks[nr_pooled_stacks++] = vm_area;
++	pool->stacks[pool->nr++] = vm_area;
+ 	return true;
+ }
+ 
+ static struct vm_struct *get_cached_thread_stack(int node)
+ {
++	struct stack_pool *pool;
+ 	struct vm_struct *vm_area;
+ 	unsigned int i;
+ 
+@@ -258,16 +268,12 @@
+ 	if (node == NUMA_NO_NODE)
+ 		node = numa_node_id();
+ 
+-	/* The pool is shared by all nodes: hand out a stack of this node */
+-	guard(raw_spinlock_irqsave)(&stack_pool_lock);
+-	for (i = nr_pooled_stacks; i--; ) {
+-		vm_area = pooled_stacks[i];
+-		if (page_to_nid(vm_area->pages[0]) == node) {
+-			pooled_stacks[i] = pooled_stacks[--nr_pooled_stacks];
+-			return vm_area;
+-		}
+-	}
+-	return NULL;
++	pool = stack_pools[node];
++	if (!pool)
++		return NULL;
++
++	guard(raw_spinlock_irqsave)(&pool->lock);
++	return pool->nr ? pool->stacks[--pool->nr] : NULL;
+ }
+ 
+ static void thread_stack_free_rcu(struct rcu_head *rh)
+@@ -883,6 +889,11 @@
+ 	set_userns_rlimit_max(&init_user_ns, UCOUNT_RLIMIT_MEMLOCK,    RLIM_INFINITY);
+ 
+ #ifdef CONFIG_VMAP_STACK
++	for_each_node_state(i, N_MEMORY) {
++		stack_pools[i] = kzalloc_node(sizeof(*stack_pools[i]), GFP_KERNEL, i);
++		if (stack_pools[i])
++			raw_spin_lock_init(&stack_pools[i]->lock);
++	}
+ 	cpuhp_setup_state(CPUHP_BP_PREPARE_DYN, "fork:vm_stack_cache",
+ 			  NULL, free_vm_stack_cache);
+ #endif

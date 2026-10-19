@@ -1,0 +1,95 @@
+Upstream-Status: Inappropriate
+
+Subject: [PATCH] sched/isolation: Add strict isolcpus= flags
+
+isolcpus= and nohz_full= keep housekeeping work from running on isolated
+CPUs, but housekeeping CPUs still write and read the isolated CPUs'
+memory: percpu units, runqueues, per-cpu caches.  On a large NUMA machine
+with a whole node or socket isolated, that traffic lands on the isolated
+CPUs' nodes.
+
+Add opt-in isolcpus= flags, one per behaviour, for code that can keep
+off isolated CPUs' memory at some cost to them.  cpu_is_isolated_strict()
+only looks at the boot-time isolcpus=/nohz_full= masks: its users keep
+per-CPU state for the CPU's lifetime, and some run before cpusets are
+set up.  No users yet.  Older kernels already skip unknown isolcpus=
+flags, so the same command line still boots them.
+---
+--- a/include/linux/sched/isolation.h
++++ b/include/linux/sched/isolation.h
+@@ -24,8 +24,14 @@ enum hk_type {
+ 	HK_TYPE_KTHREAD = HK_TYPE_KERNEL_NOISE
+ };
+ 
++/* Opt-in isolcpus= flags: keep housekeeping off isolated CPUs' memory */
++enum isol_strict {
++	ISOL_STRICT_MAX
++};
++
+ #ifdef CONFIG_CPU_ISOLATION
+ DECLARE_STATIC_KEY_FALSE(housekeeping_overridden);
++extern unsigned long isolcpus_strict;
+ extern int housekeeping_any_cpu(enum hk_type type);
+ extern const struct cpumask *housekeeping_cpumask(enum hk_type type);
+ extern bool housekeeping_enabled(enum hk_type type);
+@@ -77,4 +83,18 @@ static inline bool cpu_is_isolated(int cpu)
+ 	       cpuset_cpu_is_isolated(cpu);
+ }
+ 
++/*
++ * Boot-time isolation only: callers keep per-CPU state and placement for
++ * the CPU's lifetime, and some run before cpusets are set up.
++ */
++static inline bool cpu_is_isolated_strict(int cpu, enum isol_strict flag)
++{
++#ifdef CONFIG_CPU_ISOLATION
++	if (test_bit(flag, &isolcpus_strict))
++		return !housekeeping_cpu(cpu, HK_TYPE_DOMAIN) ||
++		       !housekeeping_cpu(cpu, HK_TYPE_KERNEL_NOISE);
++#endif
++	return false;
++}
++
+ #endif /* _LINUX_SCHED_ISOLATION_H */
+--- a/kernel/sched/isolation.c
++++ b/kernel/sched/isolation.c
+@@ -26,6 +26,11 @@ struct housekeeping {
+ 
+ static struct housekeeping housekeeping;
+ 
++unsigned long isolcpus_strict __ro_after_init;
++
++static const char * const isolcpus_strict_names[ISOL_STRICT_MAX] = {
++};
++
+ bool housekeeping_enabled(enum hk_type type)
+ {
+ 	return !!(housekeeping.flags & BIT(type));
+@@ -202,7 +207,7 @@ static int __init housekeeping_isolcpus_setup(char *str)
+ 	unsigned long flags = 0;
+ 	bool illegal = false;
+ 	char *par;
+-	int len;
++	int i, len;
+ 
+ 	while (isalpha(*str)) {
+ 		/*
+@@ -226,6 +231,18 @@ static int __init housekeeping_isolcpus_setup(char *str)
+ 			continue;
+ 		}
+ 
++		for (i = 0; i < ISOL_STRICT_MAX; i++) {
++			len = strlen(isolcpus_strict_names[i]);
++			if (!strncmp(str, isolcpus_strict_names[i], len) &&
++			    str[len] == ',')
++				break;
++		}
++		if (i < ISOL_STRICT_MAX) {
++			__set_bit(i, &isolcpus_strict);
++			str += len + 1;
++			continue;
++		}
++
+ 		/*
+ 		 * Skip unknown sub-parameter and validate that it is not
+ 		 * containing an invalid character.

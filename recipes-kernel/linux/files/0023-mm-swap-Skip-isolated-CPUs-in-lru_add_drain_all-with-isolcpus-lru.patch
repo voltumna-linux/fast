@@ -1,0 +1,31 @@
+Upstream-Status: Inappropriate
+
+Subject: [PATCH] mm/swap: Skip isolated CPUs in lru_add_drain_all() with isolcpus=lru
+
+lru_add_drain_all() asks every online CPU whether it has something to
+drain, reading its folio batches, its mlock batch and its buffer head
+LRU.  With isolcpus=lru an isolated CPU never batches folios, and
+bh_lru_install() already keeps buffer heads off isolated CPUs, so the
+answer is always no -- but the question costs eight remote cachelines
+per isolated CPU, homed on the isolated CPUs' node.  Under memory
+pressure on the housekeeping CPUs those lines are no longer cached and
+every call reads them from the isolated socket's DRAM.
+
+Skip isolated CPUs in the loop when isolcpus=lru is set.
+---
+--- a/mm/swap.c
++++ b/mm/swap.c
+@@ -882,6 +882,13 @@
+ 	for_each_online_cpu(cpu) {
+ 		struct work_struct *work = &per_cpu(lru_add_drain_work, cpu);
+ 
++		/*
++		 * With isolcpus=lru isolated CPUs never batch, and they never
++		 * cache buffer heads: don't read their batches from afar.
++		 */
++		if (cpu_is_isolated_strict(cpu, ISOL_STRICT_LRU))
++			continue;
++
+ 		if (cpu_needs_drain(cpu)) {
+ 			INIT_WORK(work, lru_add_drain_per_cpu);
+ 			queue_work_on(cpu, mm_percpu_wq, work);
