@@ -1,0 +1,91 @@
+Upstream-Status: Inappropriate
+
+Subject: [PATCH] mm: Leave isolated CPUs alone in the page table sync IPI
+
+tlb_remove_table_sync_one() IPIs every CPU so that collapse_huge_page()
+and the hugetlb unshare path wait for concurrent GUP-fast walkers.  On a
+nohz_full machine that interrupts every isolated CPU for each collapse,
+whatever process it runs: MADV_COLLAPSE and khugepaged on housekeeping
+CPUs reached the isolated ones about ten times a second.
+
+GUP-fast walks the page tables of the mm it runs, and x86 keeps the CPUs
+running an mm in mm_cpumask().  Add tlb_remove_table_sync_mm(), which
+skips the isolated CPUs that are not running the mm, and use it in both
+callers.  Other architectures keep the broadcast.
+---
+--- a/include/asm-generic/tlb.h
++++ b/include/asm-generic/tlb.h
+@@ -250,6 +250,7 @@
+ #endif
+ 
+ void tlb_remove_table_sync_one(void);
++void tlb_remove_table_sync_mm(struct mm_struct *mm);
+ 
+ #else
+ 
+@@ -258,6 +259,7 @@
+ #endif
+ 
+ static inline void tlb_remove_table_sync_one(void) { }
++static inline void tlb_remove_table_sync_mm(struct mm_struct *mm) { }
+ 
+ #endif /* CONFIG_MMU_GATHER_RCU_TABLE_FREE */
+ 
+@@ -840,7 +842,7 @@
+ 	 * required IPIs already for us.
+ 	 */
+ 	if (tlb->fully_unshared_tables) {
+-		tlb_remove_table_sync_one();
++		tlb_remove_table_sync_mm(tlb->mm);
+ 		tlb->fully_unshared_tables = false;
+ 	}
+ }
+--- a/mm/khugepaged.c
++++ b/mm/khugepaged.c
+@@ -1176,7 +1176,7 @@
+ 	_pmd = pmdp_collapse_flush(vma, address, pmd);
+ 	spin_unlock(pmd_ptl);
+ 	mmu_notifier_invalidate_range_end(&range);
+-	tlb_remove_table_sync_one();
++	tlb_remove_table_sync_mm(mm);
+ 
+ 	pte = pte_offset_map_lock(mm, &_pmd, address, &pte_ptl);
+ 	if (pte) {
+--- a/mm/mmu_gather.c
++++ b/mm/mmu_gather.c
+@@ -6,6 +6,7 @@
+ #include <linux/mm_inline.h>
+ #include <linux/pagemap.h>
+ #include <linux/rcupdate.h>
++#include <linux/sched/isolation.h>
+ #include <linux/smp.h>
+ #include <linux/swap.h>
+ #include <linux/rmap.h>
+@@ -286,6 +287,27 @@
+ 	smp_call_function(tlb_remove_table_smp_sync, NULL, 1);
+ }
+ 
++static bool tlb_remove_table_sync_cond(int cpu, void *info)
++{
++	return !cpu_is_isolated(cpu) || cpumask_test_cpu(cpu, mm_cpumask(info));
++}
++
++/*
++ * Like tlb_remove_table_sync_one(), but leave alone the isolated CPUs that are
++ * not running @mm: software page-table walkers that rely on IRQ disabling
++ * (GUP-fast) walk the page tables of the mm they run, and x86 keeps every CPU
++ * that runs an mm in its mm_cpumask().
++ */
++void tlb_remove_table_sync_mm(struct mm_struct *mm)
++{
++	if (!IS_ENABLED(CONFIG_X86)) {
++		tlb_remove_table_sync_one();
++		return;
++	}
++	on_each_cpu_cond(tlb_remove_table_sync_cond, tlb_remove_table_smp_sync,
++			 mm, true);
++}
++
+ static void tlb_remove_table_rcu(struct rcu_head *head)
+ {
+ 	__tlb_remove_table_free(container_of(head, struct mmu_table_batch, rcu));

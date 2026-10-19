@@ -1,0 +1,53 @@
+Upstream-Status: Inappropriate
+
+Subject: [PATCH] fork: Don't cache kernel stacks on isolated CPUs
+
+A stack freed on an isolated CPU is parked in that CPU's cache, where
+nothing is going to fork, and its vfree() eventually runs there too.
+
+With isolcpus=stack, bypass the cache on nohz_full isolated CPUs.  The
+stack takes the RCU path; nohz_full implies rcu_nocbs, so the callback
+runs on a housekeeping CPU and caches or frees the stack there.
+---
+--- a/include/linux/sched/isolation.h
++++ b/include/linux/sched/isolation.h
+@@ -27,6 +27,7 @@ enum hk_type {
+ /* Opt-in isolcpus= flags: keep housekeeping off isolated CPUs' memory */
+ enum isol_strict {
+ 	ISOL_STRICT_PCPU,
++	ISOL_STRICT_STACK,
+ 	ISOL_STRICT_MAX
+ };
+ 
+--- a/kernel/fork.c
++++ b/kernel/fork.c
+@@ -22,6 +22,7 @@
+ #include <linux/sched/task.h>
+ #include <linux/sched/task_stack.h>
+ #include <linux/sched/cputime.h>
++#include <linux/sched/isolation.h>
+ #include <linux/sched/ext.h>
+ #include <linux/seq_file.h>
+ #include <linux/rtmutex.h>
+@@ -220,6 +221,11 @@ static bool try_release_thread_stack_to_cache(struct vm_struct *vm_are
+ {
+ 	unsigned int i;
+ 
++	/* nohz_full implies rcu_nocbs: the RCU callback runs on housekeeping */
++	if (cpu_is_isolated_strict(raw_smp_processor_id(), ISOL_STRICT_STACK) &&
++	    tick_nohz_full_cpu(raw_smp_processor_id()))
++		return false;
++
+ 	for (i = 0; i < NR_CACHED_STACKS; i++) {
+ 		struct vm_struct *tmp = NULL;
+ 
+--- a/kernel/sched/isolation.c
++++ b/kernel/sched/isolation.c
+@@ -29,6 +29,7 @@ static struct housekeeping housekeeping;
+ unsigned long isolcpus_strict __ro_after_init;
+ 
+ static const char * const isolcpus_strict_names[ISOL_STRICT_MAX] = {
++	[ISOL_STRICT_STACK]	= "stack",
+ 	[ISOL_STRICT_PCPU]	= "pcpu",
+ };
+ 

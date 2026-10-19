@@ -1,0 +1,64 @@
+Upstream-Status: Inappropriate
+
+Subject: [PATCH] mm/vmstat: Leave isolated CPUs alone in vmstat_refresh()
+
+Reading or writing /proc/sys/vm/stat_refresh (sysctl -a does) queues
+refresh_vm_stats() on every online CPU and waits for all of them.  On an
+isolated CPU running a SCHED_FIFO task the kworker only gets to run
+through the fair server, so each read preempts that task for up to the
+server runtime: 1 ms per read on a nohz_full machine.
+
+Skip isolated CPUs, as vmstat_shepherd() already does: they fold their
+differentials when they stop the tick, and stat_refresh misses only what
+they have not folded yet.
+---
+--- a/mm/vmstat.c
+--- a/mm/vmstat.c
++++ b/mm/vmstat.c
+@@ -1983,6 +1983,37 @@
+ 	refresh_cpu_vm_stats(true);
+ }
+ 
++/*
++ * Like schedule_on_each_cpu(refresh_vm_stats), but leave isolated CPUs alone,
++ * as vmstat_shepherd() does: a work item there preempts the isolated task, and
++ * isolated CPUs fold their own differentials when they stop the tick.
++ */
++static int refresh_vm_stats_housekeeping(void)
++{
++	struct work_struct __percpu *works;
++	int cpu;
++
++	works = alloc_percpu(struct work_struct);
++	if (!works)
++		return -ENOMEM;
++
++	cpus_read_lock();
++	for_each_online_cpu(cpu) {
++		struct work_struct *work = per_cpu_ptr(works, cpu);
++
++		if (cpu_is_isolated(cpu))
++			continue;
++		INIT_WORK(work, refresh_vm_stats);
++		schedule_work_on(cpu, work);
++	}
++	for_each_online_cpu(cpu)
++		if (!cpu_is_isolated(cpu))
++			flush_work(per_cpu_ptr(works, cpu));
++	cpus_read_unlock();
++	free_percpu(works);
++	return 0;
++}
++
+ static int vmstat_refresh(const struct ctl_table *table, int write,
+ 		   void *buffer, size_t *lenp, loff_t *ppos)
+ {
+@@ -2002,7 +2033,7 @@
+ 	 * transiently negative values, report an error here if any of
+ 	 * the stats is negative, so we know to go looking for imbalance.
+ 	 */
+-	err = schedule_on_each_cpu(refresh_vm_stats);
++	err = refresh_vm_stats_housekeeping();
+ 	if (err)
+ 		return err;
+ 	for (i = 0; i < NR_VM_ZONE_STAT_ITEMS; i++) {
