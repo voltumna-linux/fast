@@ -1,0 +1,34 @@
+Upstream-Status: Inappropriate
+
+Subject: [PATCH] rcu: Don't dirty rcu_data of CPUs that stayed quiescent
+
+Each grace period's first FQS scan stores a fresh watching snapshot into
+the rcu_data of every CPU still holding it up.  For CPUs that stayed
+idle or in nohz_full userspace since the previous scan the value is the
+same, but the store still pulls their cacheline over, every grace period,
+for each of them.
+
+Only store the snapshot when it changed.
+---
+--- a/kernel/rcu/tree.c
++++ b/kernel/rcu/tree.c
+@@ -817,6 +817,8 @@ static void rcu_gpnum_ovf(struct rcu_node *rnp, struct rcu_data *rdp)
+  */
+ static int rcu_watching_snap_save(struct rcu_data *rdp)
+ {
++	int snap;
++
+ 	/*
+ 	 * Full ordering between remote CPU's post idle accesses and updater's
+ 	 * accesses prior to current GP (and also the started GP sequence number)
+@@ -828,7 +830,9 @@ static int rcu_watching_snap_save(struct rcu_data *rdp)
+ 	 * Ordering between remote CPU's pre idle accesses and post grace period
+ 	 * updater's accesses is enforced by the below acquire semantic.
+ 	 */
+-	rdp->watching_snap = ct_rcu_watching_cpu_acquire(rdp->cpu);
++	snap = ct_rcu_watching_cpu_acquire(rdp->cpu);
++	if (rdp->watching_snap != snap)
++		rdp->watching_snap = snap;
+ 	if (rcu_watching_snap_in_eqs(rdp->watching_snap)) {
+ 		trace_rcu_fqs(rcu_state.name, rdp->gp_seq, rdp->cpu, TPS("dti"));
+ 		rcu_gpnum_ovf(rdp->mynode, rdp);

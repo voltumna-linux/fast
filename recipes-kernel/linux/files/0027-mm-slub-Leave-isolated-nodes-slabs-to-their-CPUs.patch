@@ -1,0 +1,99 @@
+Upstream-Status: Inappropriate
+
+Subject: [PATCH] mm/slub: Leave isolated nodes' slabs to their CPUs with isolcpus=node
+
+A slab of a node whose CPUs are all isolated reaches a CPU of another
+node in three ways; this patch closes the first two.  get_any_partial()
+takes it from its node's partial list when the local node has none,
+nearly always with the default remote_node_defrag_ratio, and cpusets do
+not restrict GFP_KERNEL allocations.  A free into a full slab puts it on
+the freeing CPU's partial list: with the isolated CPUs' RCU callbacks
+offloaded, their deferred frees run on housekeeping CPUs.  And an
+explicit request for that node installs the slab as the CPU's own.
+Either way the housekeeping CPU then fills the slab with its own
+objects, which live in the isolated CPUs' memory: on a two-socket
+machine whose second socket is isolated, IBS found pipe_inode_info and
+task_struct objects of a housekeeping load there, though how much of it
+each way explains is not measured yet.
+
+With isolcpus=node, a CPU of another node skips those nodes in
+get_any_partial(), and a free of its into a full slab of theirs puts the
+slab on its node's partial list, or frees it if it is empty, as for
+caches without per-CPU partial lists.  Explicit node requests and new
+slab pages are unchanged.
+---
+--- a/mm/slub.c
++++ b/mm/slub.c
+@@ -27,6 +27,7 @@
+ #include <linux/kmsan.h>
+ #include <linux/cpu.h>
+ #include <linux/cpuset.h>
++#include <linux/sched/isolation.h>
+ #include <linux/mempolicy.h>
+ #include <linux/ctype.h>
+ #include <linux/stackdepot.h>
+@@ -3553,6 +3554,18 @@
+ #endif
+ static inline bool pfmemalloc_match(struct slab *slab, gfp_t gfpflags);
+ 
++/*
++ * With isolcpus=node, the slabs of a node whose CPUs are all isolated are left
++ * to those CPUs: a CPU of another node does not take them over, except through
++ * explicit node requests, or the objects it allocates would live in the
++ * isolated CPUs' memory.
++ */
++static inline bool slab_node_isolated_from_here(int nid)
++{
++	return node_is_isolated_strict(nid) &&
++	       !node_is_isolated_strict(numa_node_id());
++}
++
+ /*
+  * Try to allocate a partial slab from a specific node.
+  */
+@@ -3665,6 +3678,9 @@
+ 		for_each_zone_zonelist(zone, z, zonelist, highest_zoneidx) {
+ 			struct kmem_cache_node *n;
+ 
++			if (slab_node_isolated_from_here(zone_to_nid(zone)))
++				continue;
++
+ 			n = get_node(s, zone_to_nid(zone));
+ 
+ 			if (n && cpuset_zone_allowed(zone, pc->flags) &&
+@@ -5935,6 +5951,8 @@
+ 	struct kmem_cache_node *n = NULL;
+ 	unsigned long flags;
+ 	bool on_node_partial;
++	bool cpu_partial = kmem_cache_has_cpu_partial(s) &&
++			   !slab_node_isolated_from_here(slab_nid(slab));
+ 
+ 	stat(s, FREE_SLOWPATH);
+ 
+@@ -5956,7 +5974,7 @@
+ 		new.inuse -= cnt;
+ 		if ((!new.inuse || !prior) && !was_frozen) {
+ 			/* Needs to be taken off a list */
+-			if (!kmem_cache_has_cpu_partial(s) || prior) {
++			if (!cpu_partial || prior) {
+ 
+ 				n = get_node(s, slab_nid(slab));
+ 				/*
+@@ -5986,7 +6004,7 @@
+ 			 * activity can be necessary.
+ 			 */
+ 			stat(s, FREE_FROZEN);
+-		} else if (kmem_cache_has_cpu_partial(s) && !prior) {
++		} else if (cpu_partial && !prior) {
+ 			/*
+ 			 * If we started with a full slab then put it onto the
+ 			 * per cpu partial list.
+@@ -6014,7 +6032,7 @@
+ 	 * Objects left in the slab. If it was not on the partial list before
+ 	 * then add it.
+ 	 */
+-	if (!kmem_cache_has_cpu_partial(s) && unlikely(!prior)) {
++	if (!cpu_partial && unlikely(!prior)) {
+ 		add_partial(n, slab, DEACTIVATE_TO_TAIL);
+ 		stat(s, FREE_ADD_PARTIAL);
+ 	}
