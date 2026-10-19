@@ -1,0 +1,98 @@
+Upstream-Status: Inappropriate
+
+Subject: [PATCH] printk: Keep the log buffer off isolated nodes with isolcpus=node
+
+On machines with many CPUs, setup_log_buf() replaces the static log
+buffer with one from memblock, which allocates from the top, on the
+node holding the highest addresses.  On a two-socket machine whose
+second socket is isolated, that is the isolated CPUs' memory: every
+printk() from a housekeeping CPU writes the ring buffer there, and IBS
+found prb_reserve() and vsnprintf() doing just that under a load that
+kept logging.
+
+With isolcpus=node, allocate the buffer, its descriptors and its infos
+on the boot CPU's node, assumed to be a housekeeping one.  A late check
+warns if any of the three is on an isolated node anyway: when the boot
+CPU is isolated, when memblock fell back to another node, or with
+log_buf_len= on x86, whose buffer is allocated in setup_arch() before
+isolcpus= is parsed.
+---
+--- a/kernel/printk/printk.c
++++ b/kernel/printk/printk.c
+@@ -48,6 +48,7 @@
+ #include <linux/sched/clock.h>
+ #include <linux/sched/debug.h>
+ #include <linux/sched/task_stack.h>
++#include <linux/sched/isolation.h>
+ #include <linux/panic.h>
+ 
+ #include <linux/uaccess.h>
+@@ -1101,6 +1102,24 @@
+ static inline void log_buf_add_cpu(void) {}
+ #endif /* CONFIG_SMP */
+ 
++/* isolcpus=node: say so if the log buffer still is on an isolated node */
++static int __init log_buf_node_check(void)
++{
++	const void *buf[] = { log_buf, printk_rb_dynamic.desc_ring.descs,
++			      printk_rb_dynamic.desc_ring.infos };
++	int i, nid;
++
++	if (!isolcpus_strict_enabled(ISOL_STRICT_NODE) || log_buf == __log_buf)
++		return 0;
++	for (i = 0; i < ARRAY_SIZE(buf); i++) {
++		nid = page_to_nid(virt_to_page(buf[i]));
++		if (node_is_isolated_strict(nid))
++			pr_warn("log buffer on node %d, whose CPUs are all isolated\n", nid);
++	}
++	return 0;
++}
++late_initcall(log_buf_node_check);
++
+ static void __init set_percpu_data_ready(void)
+ {
+ 	__printk_percpu_data_ready = true;
+@@ -1158,6 +1177,16 @@
+ 	char *new_log_buf;
+ 	unsigned int free;
+ 	u64 seq;
++	int nid = NUMA_NO_NODE;
++
++	/*
++	 * memblock allocates from the top, on the node holding the highest
++	 * addresses.  With isolcpus=node that may be a node whose CPUs are all
++	 * isolated, and every printk() would write to their memory: use the
++	 * boot CPU's node, a housekeeping one (checked by log_buf_node_check()).
++	 */
++	if (isolcpus_strict_enabled(ISOL_STRICT_NODE))
++		nid = numa_node_id();
+ 
+ 	/*
+ 	 * Some archs call setup_log_buf() multiple times - first is very
+@@ -1187,7 +1216,7 @@
+ 		goto out;
+ 	}
+ 
+-	new_log_buf = memblock_alloc(new_log_buf_len, LOG_ALIGN);
++	new_log_buf = memblock_alloc_node(new_log_buf_len, LOG_ALIGN, nid);
+ 	if (unlikely(!new_log_buf)) {
+ 		pr_err("log_buf_len: %lu text bytes not available\n",
+ 		       new_log_buf_len);
+@@ -1195,7 +1224,7 @@
+ 	}
+ 
+ 	new_descs_size = new_descs_count * sizeof(struct prb_desc);
+-	new_descs = memblock_alloc(new_descs_size, LOG_ALIGN);
++	new_descs = memblock_alloc_node(new_descs_size, LOG_ALIGN, nid);
+ 	if (unlikely(!new_descs)) {
+ 		pr_err("log_buf_len: %zu desc bytes not available\n",
+ 		       new_descs_size);
+@@ -1203,7 +1232,7 @@
+ 	}
+ 
+ 	new_infos_size = new_descs_count * sizeof(struct printk_info);
+-	new_infos = memblock_alloc(new_infos_size, LOG_ALIGN);
++	new_infos = memblock_alloc_node(new_infos_size, LOG_ALIGN, nid);
+ 	if (unlikely(!new_infos)) {
+ 		pr_err("log_buf_len: %zu info bytes not available\n",
+ 		       new_infos_size);

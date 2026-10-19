@@ -1,0 +1,55 @@
+Upstream-Status: Inappropriate
+
+Subject: [PATCH] mm/page_alloc: Don't keep pcp lists on isolated CPUs
+
+drain_all_pages() drains the pcp lists of every CPU from a housekeeping
+CPU, taking the remote pcp lock and freeing pages that sat in the
+isolated CPU's lists.
+
+With isolcpus=pcp, give isolated CPUs the boot pageset values: no pages
+are kept in their lists, so there is nothing to drain there.  Their own
+allocations and frees go to the buddy allocator directly.
+---
+--- a/include/linux/sched/isolation.h
++++ b/include/linux/sched/isolation.h
+@@ -30,6 +30,7 @@ enum isol_strict {
+ 	ISOL_STRICT_STACK,
+ 	ISOL_STRICT_CPUTIME,
+ 	ISOL_STRICT_LRU,
++	ISOL_STRICT_PCP,
+ 	ISOL_STRICT_MAX
+ };
+ 
+--- a/kernel/sched/isolation.c
++++ b/kernel/sched/isolation.c
+@@ -29,6 +29,7 @@ static struct housekeeping housekeeping;
+ unsigned long isolcpus_strict __ro_after_init;
+ 
+ static const char * const isolcpus_strict_names[ISOL_STRICT_MAX] = {
++	[ISOL_STRICT_PCP]	= "pcp",
+ 	[ISOL_STRICT_LRU]	= "lru",
+ 	[ISOL_STRICT_CPUTIME]	= "cputime",
+ 	[ISOL_STRICT_STACK]	= "stack",
+--- a/mm/page_alloc.c
++++ b/mm/page_alloc.c
+@@ -45,6 +45,7 @@
+ #include <linux/mmu_notifier.h>
+ #include <linux/migrate.h>
+ #include <linux/sched/mm.h>
++#include <linux/sched/isolation.h>
+ #include <linux/page_owner.h>
+ #include <linux/page_table_check.h>
+ #include <linux/memcontrol.h>
+@@ -6063,7 +6064,11 @@ static void __zone_set_pageset_high_and_batch(struct zone *zone, unsig
+ 
+ 	for_each_possible_cpu(cpu) {
+ 		pcp = per_cpu_ptr(zone->per_cpu_pageset, cpu);
+-		pageset_update(pcp, high_min, high_max, batch);
++		if (cpu_is_isolated_strict(cpu, ISOL_STRICT_PCP))
++			pageset_update(pcp, BOOT_PAGESET_HIGH, BOOT_PAGESET_HIGH,
++				       BOOT_PAGESET_BATCH);
++		else
++			pageset_update(pcp, high_min, high_max, batch);
+ 	}
+ }
+ 

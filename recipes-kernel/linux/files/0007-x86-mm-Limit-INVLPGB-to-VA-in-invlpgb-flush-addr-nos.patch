@@ -1,0 +1,30 @@
+Upstream-Status: Inappropriate
+
+From: Jann Horn <jannh@google.com>
+Subject: [PATCH] x86/mm: Limit INVLPGB to VA in invlpgb_flush_addr_nosync()
+
+The intent of invlpgb_flush_addr_nosync() is to flush a specific virtual
+address range, but INVLPGB_FLAG_VA is not set.
+If I understand AMD's documentation correctly, this means this will flush
+the entire TLB (except entries for guest ASIDs).
+That's safe, but seems like an unintentionally broad flush.
+Fix it by setting INVLPGB_FLAG_VA.
+
+Fixes: b7aa05cbdc52 ("x86/mm: Add INVLPGB support code")
+Signed-off-by: Jann Horn <jannh@google.com>
+Reviewed-by: Rik van Riel <riel@surriel.com>
+Link: https://lore.kernel.org/r/20250527-x86-overbroad-invlpgb-v1-1-64ca98aa2a3a@google.com
+[ backport to 6.18.29: unchanged; needs the two previous patches ]
+---
+--- a/arch/x86/include/asm/tlb.h
++++ b/arch/x86/include/asm/tlb.h
+@@ -153,7 +153,8 @@ static inline void invlpgb_flush_all(void)
+ /* Flush addr, including globals, for all PCIDs. */
+ static inline void invlpgb_flush_addr_nosync(unsigned long addr, u16 nr)
+ {
+-	__invlpgb(0, 0, addr, nr, PTE_STRIDE, INVLPGB_FLAG_INCLUDE_GLOBAL);
++	__invlpgb(0, 0, addr, nr, PTE_STRIDE,
++			INVLPGB_FLAG_VA | INVLPGB_FLAG_INCLUDE_GLOBAL);
+ }
+ 
+ /* Flush all mappings for all PCIDs except globals. */

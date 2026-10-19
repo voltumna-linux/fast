@@ -1,0 +1,76 @@
+Upstream-Status: Inappropriate
+
+Subject: [PATCH] fork: Back the per-cpu stack caches with a shared pool
+
+A task often exits on another CPU than the one it was forked on.  Its
+stack then fills the exiting CPU's two-entry cache and the rest is
+vfree()d, while the forking CPU, whose cache stays empty, vmalloc()s new
+ones.  At a few thousand forks per second that is a steady stream of
+lazy vfree()s, vmap purges and machine-wide TLB flushes.
+
+Put a small shared pool behind the per-cpu caches so such stacks are
+reused.  The pool is taken under a raw spinlock only when the per-cpu
+cache is empty or full.
+---
+--- a/kernel/fork.c
++++ b/kernel/fork.c
+@@ -197,6 +197,13 @@ static inline void free_task_struct(struct task_struct *tsk)
+  */
+ #define NR_CACHED_STACKS 2
+ static DEFINE_PER_CPU(struct vm_struct *, cached_stacks[NR_CACHED_STACKS]);
++
++/* Stacks freed on one CPU and needed on another */
++#define NR_POOLED_STACKS 64
++static struct vm_struct *pooled_stacks[NR_POOLED_STACKS];
++static unsigned int nr_pooled_stacks;
++static DEFINE_RAW_SPINLOCK(stack_pool_lock);
++
+ /*
+  * Allocated stacks are cached and later reused by new threads, so memcg
+  * accounting is performed by the code assigning/releasing stacks to tasks.
+@@ -219,7 +226,27 @@ static bool try_release_thread_stack_to_cache(struct vm_struct *vm_are
+ 		if (this_cpu_try_cmpxchg(cached_stacks[i], &tmp, vm_area))
+ 			return true;
+ 	}
+-	return false;
++
++	guard(raw_spinlock_irqsave)(&stack_pool_lock);
++	if (nr_pooled_stacks == NR_POOLED_STACKS)
++		return false;
++	pooled_stacks[nr_pooled_stacks++] = vm_area;
++	return true;
++}
++
++static struct vm_struct *get_cached_thread_stack(void)
++{
++	struct vm_struct *vm_area;
++	unsigned int i;
++
++	for (i = 0; i < NR_CACHED_STACKS; i++) {
++		vm_area = this_cpu_xchg(cached_stacks[i], NULL);
++		if (vm_area)
++			return vm_area;
++	}
++
++	guard(raw_spinlock_irqsave)(&stack_pool_lock);
++	return nr_pooled_stacks ? pooled_stacks[--nr_pooled_stacks] : NULL;
+ }
+ 
+ static void thread_stack_free_rcu(struct rcu_head *rh)
+@@ -284,13 +311,9 @@ static int alloc_thread_stack_node(struct task_struct *tsk, int node)
+ {
+ 	struct vm_struct *vm_area;
+ 	void *stack;
+-	int i;
+-
+-	for (i = 0; i < NR_CACHED_STACKS; i++) {
+-		vm_area = this_cpu_xchg(cached_stacks[i], NULL);
+-		if (!vm_area)
+-			continue;
+-
++
++	vm_area = get_cached_thread_stack();
++	if (vm_area) {
+ 		if (memcg_charge_kernel_stack(vm_area)) {
+ 			vfree(vm_area->addr);
+ 			return -ENOMEM;
