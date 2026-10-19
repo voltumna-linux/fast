@@ -1,0 +1,49 @@
+Upstream-Status: Inappropriate
+
+Subject: [PATCH] x86/fpu: Show the global ASID of a process in /proc/PID/arch_status
+
+A process with a global ASID makes every TLB flush it causes an INVLPGB
+broadcast that all CPUs take, with no interrupt and no counter on the
+CPUs that take it.  Nothing tells which processes have one: the only
+sign is the TLB row of /proc/interrupts staying still on the CPUs of a
+process that flushes.
+
+Add "x86_global_asid:" to /proc/PID/arch_status, 0 if the process has
+none or no INVLPGB.
+---
+--- a/arch/x86/kernel/fpu/xstate.c
++++ b/arch/x86/kernel/fpu/xstate.c
+@@ -12,6 +12,7 @@
+ #include <linux/pkeys.h>
+ #include <linux/seq_file.h>
+ #include <linux/proc_fs.h>
++#include <linux/sched/mm.h>
+ #include <linux/vmalloc.h>
+ #include <linux/coredump.h>
+ #include <linux/sort.h>
+@@ -1914,12 +1915,25 @@
+ int proc_pid_arch_status(struct seq_file *m, struct pid_namespace *ns,
+ 			struct pid *pid, struct task_struct *task)
+ {
++	struct mm_struct *mm;
++
+ 	/*
+ 	 * Report AVX512 state if the processor and build option supported.
+ 	 */
+ 	if (cpu_feature_enabled(X86_FEATURE_AVX512F))
+ 		avx512_status(m, task);
+ 
++	/*
++	 * Report the global ASID of the process, 0 if it has none.  With one,
++	 * its TLB flushes are INVLPGB broadcasts to every CPU in the system.
++	 */
++	mm = get_task_mm(task);
++	if (mm) {
++		seq_put_decimal_ull(m, "x86_global_asid:\t", mm_global_asid(mm));
++		seq_putc(m, '\n');
++		mmput(mm);
++	}
++
+ 	return 0;
+ }
+ #endif /* CONFIG_PROC_PID_ARCH_STATUS */

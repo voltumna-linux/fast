@@ -1,0 +1,172 @@
+Upstream-Status: Inappropriate
+
+Subject: [PATCH] sched/topology: Allocate root domains on the node of their CPUs
+
+alloc_rootdomain() and the cpupri and cpudl state it sets up are
+allocated on the node of the CPU that happens to rebuild the sched
+domains.  Every RT and deadline enqueue and dequeue on the domain's CPUs
+then does atomic updates on that memory (cpupri_set(), cpudl_set()).
+
+On a two-socket machine whose second socket is isolated, a rebuild run
+from a CPU of the isolated socket leaves the housekeeping CPUs' root
+domain there: an RT-heavy load on the housekeeping socket kept moving
+those cachelines between its CCXs while their home was on the other
+socket, and the NIC DMA of the isolated socket stalled for 20-40 us
+several times a second.  Rebuilding the domains from a housekeeping CPU
+made the stalls go away.
+
+Allocate the root domain, its masks, cpupri and cpudl on the node of the
+first CPU of the domain instead.
+---
+--- a/kernel/sched/cpudeadline.c
++++ b/kernel/sched/cpudeadline.c
+@@ -244,21 +244,22 @@
+ /*
+  * cpudl_init - initialize the cpudl structure
+  * @cp: the cpudl max-heap context
++ * @node: NUMA node to allocate on
+  */
+-int cpudl_init(struct cpudl *cp)
++int cpudl_init(struct cpudl *cp, int node)
+ {
+ 	int i;
+ 
+ 	raw_spin_lock_init(&cp->lock);
+ 	cp->size = 0;
+ 
+-	cp->elements = kcalloc(nr_cpu_ids,
+-			       sizeof(struct cpudl_item),
+-			       GFP_KERNEL);
++	cp->elements = kcalloc_node(nr_cpu_ids,
++				    sizeof(struct cpudl_item),
++				    GFP_KERNEL, node);
+ 	if (!cp->elements)
+ 		return -ENOMEM;
+ 
+-	if (!zalloc_cpumask_var(&cp->free_cpus, GFP_KERNEL)) {
++	if (!zalloc_cpumask_var_node(&cp->free_cpus, GFP_KERNEL, node)) {
+ 		kfree(cp->elements);
+ 		return -ENOMEM;
+ 	}
+--- a/kernel/sched/cpudeadline.h
++++ b/kernel/sched/cpudeadline.h
+@@ -20,5 +20,5 @@
+ int  cpudl_find(struct cpudl *cp, struct task_struct *p, struct cpumask *later_mask);
+ void cpudl_set(struct cpudl *cp, int cpu, u64 dl);
+ void cpudl_clear(struct cpudl *cp, int cpu, bool online);
+-int  cpudl_init(struct cpudl *cp);
++int  cpudl_init(struct cpudl *cp, int node);
+ void cpudl_cleanup(struct cpudl *cp);
+--- a/kernel/sched/cpupri.c
++++ b/kernel/sched/cpupri.c
+@@ -273,10 +273,11 @@
+ /**
+  * cpupri_init - initialize the cpupri structure
+  * @cp: The cpupri context
++ * @node: NUMA node to allocate on
+  *
+  * Return: -ENOMEM on memory allocation failure.
+  */
+-int cpupri_init(struct cpupri *cp)
++int cpupri_init(struct cpupri *cp, int node)
+ {
+ 	int i;
+ 
+@@ -284,11 +285,11 @@
+ 		struct cpupri_vec *vec = &cp->pri_to_cpu[i];
+ 
+ 		atomic_set(&vec->count, 0);
+-		if (!zalloc_cpumask_var(&vec->mask, GFP_KERNEL))
++		if (!zalloc_cpumask_var_node(&vec->mask, GFP_KERNEL, node))
+ 			goto cleanup;
+ 	}
+ 
+-	cp->cpu_to_pri = kcalloc(nr_cpu_ids, sizeof(int), GFP_KERNEL);
++	cp->cpu_to_pri = kcalloc_node(nr_cpu_ids, sizeof(int), GFP_KERNEL, node);
+ 	if (!cp->cpu_to_pri)
+ 		goto cleanup;
+ 
+--- a/kernel/sched/cpupri.h
++++ b/kernel/sched/cpupri.h
+@@ -26,5 +26,5 @@
+ 			 struct cpumask *lowest_mask,
+ 			 bool (*fitness_fn)(struct task_struct *p, int cpu));
+ void cpupri_set(struct cpupri *cp, int cpu, int pri);
+-int  cpupri_init(struct cpupri *cp);
++int  cpupri_init(struct cpupri *cp, int node);
+ void cpupri_cleanup(struct cpupri *cp);
+--- a/kernel/sched/topology.c
++++ b/kernel/sched/topology.c
+@@ -527,15 +527,15 @@
+ 	call_rcu(&rd->rcu, free_rootdomain);
+ }
+ 
+-static int init_rootdomain(struct root_domain *rd)
++static int init_rootdomain(struct root_domain *rd, int node)
+ {
+-	if (!zalloc_cpumask_var(&rd->span, GFP_KERNEL))
++	if (!zalloc_cpumask_var_node(&rd->span, GFP_KERNEL, node))
+ 		goto out;
+-	if (!zalloc_cpumask_var(&rd->online, GFP_KERNEL))
++	if (!zalloc_cpumask_var_node(&rd->online, GFP_KERNEL, node))
+ 		goto free_span;
+-	if (!zalloc_cpumask_var(&rd->dlo_mask, GFP_KERNEL))
++	if (!zalloc_cpumask_var_node(&rd->dlo_mask, GFP_KERNEL, node))
+ 		goto free_online;
+-	if (!zalloc_cpumask_var(&rd->rto_mask, GFP_KERNEL))
++	if (!zalloc_cpumask_var_node(&rd->rto_mask, GFP_KERNEL, node))
+ 		goto free_dlo_mask;
+ 
+ #ifdef HAVE_RT_PUSH_IPI
+@@ -546,10 +546,10 @@
+ 
+ 	rd->visit_cookie = 0;
+ 	init_dl_bw(&rd->dl_bw);
+-	if (cpudl_init(&rd->cpudl) != 0)
++	if (cpudl_init(&rd->cpudl, node) != 0)
+ 		goto free_rto_mask;
+ 
+-	if (cpupri_init(&rd->cpupri) != 0)
++	if (cpupri_init(&rd->cpupri, node) != 0)
+ 		goto free_cpudl;
+ 	return 0;
+ 
+@@ -575,20 +575,20 @@
+ 
+ void __init init_defrootdomain(void)
+ {
+-	init_rootdomain(&def_root_domain);
++	init_rootdomain(&def_root_domain, NUMA_NO_NODE);
+ 
+ 	atomic_set(&def_root_domain.refcount, 1);
+ }
+ 
+-static struct root_domain *alloc_rootdomain(void)
++static struct root_domain *alloc_rootdomain(int node)
+ {
+ 	struct root_domain *rd;
+ 
+-	rd = kzalloc(sizeof(*rd), GFP_KERNEL);
++	rd = kzalloc_node(sizeof(*rd), GFP_KERNEL, node);
+ 	if (!rd)
+ 		return NULL;
+ 
+-	if (init_rootdomain(rd) != 0) {
++	if (init_rootdomain(rd, node) != 0) {
+ 		kfree(rd);
+ 		return NULL;
+ 	}
+@@ -1558,7 +1558,12 @@
+ 	d->sd = alloc_percpu(struct sched_domain *);
+ 	if (!d->sd)
+ 		return sa_sd_storage;
+-	d->rd = alloc_rootdomain();
++	/*
++	 * Every RT and deadline enqueue on these CPUs writes the root domain:
++	 * put it on their node, not on the node of whichever CPU happens to
++	 * rebuild the domains.
++	 */
++	d->rd = alloc_rootdomain(cpu_to_node(cpumask_first(cpu_map)));
+ 	if (!d->rd)
+ 		return sa_sd;
+ 

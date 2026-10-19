@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+trap 'printf "Error at line %s\n" "$LINENO" >&2' ERR
+
+read -r -d '' DATI <<'EOF' || true
+s-d1718t-x12sdv-4c-sp6f image fast-sde intranet tar
+s-d1718t-x12sdv-4c-sp6f image fast-sre intranet tar
+s-d1718t-x12sdv-4c-sp6f sdk   fast-sdk intranet sh
+d-9755-h14dsh           image fast-sde intranet tar
+d-9755-h14dsh           image fast-sre intranet tar
+d-9755-h14dsh           sdk   fast-sdk intranet sh
+EOF
+
+build_all() {
+    local FAILED=()
+
+    exec 3<<< "$DATI"
+
+    # shellcheck disable=SC2034  # outputdir/format are columns of the table shared with release
+    while read -r -u 3 machine type image outputdir format; do
+        export MACHINE="$machine"
+
+        case "$type" in
+            image)
+                if ! nice bitbake -k "$image"; then
+                    FAILED+=("${machine}/${image}")
+                fi
+                ;;
+            sdk)
+                continue
+                ;;
+            *)
+                printf 'Type unknown: %s\n' "$type" >&2
+                exit 1
+                ;;
+        esac
+    done
+
+    exec 3<&-
+
+    if (( ${#FAILED[@]} )); then
+        printf 'Failed builds:\n' >&2
+        printf '  %s\n' "${FAILED[@]}" >&2
+        return 1
+    fi
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    build_all
+fi

@@ -1,0 +1,104 @@
+Upstream-Status: Inappropriate
+
+Subject: [PATCH] x86/mm: Flush housekeeping batched unmaps by IPI with isolcpus=tlbbatch
+
+Reclaim, migration and THP splitting unmap pages of many processes and
+flush the TLBs once, in arch_tlbbatch_flush().  With INVLPGB that is
+invlpgb_flush_all_nonglobals(): every CPU in the system, isolated ones
+included, drops every non-global TLB entry of every PCID.
+arch_tlbbatch_add_pending() asks for it for every mm, because the IPI
+path never flushes a global ASID, and an mm with one may have entries on
+CPUs outside its mm_cpumask().
+
+An mm without a global ASID is flushed correctly by the IPIs to the
+batch's cpumask: a CPU outside it that still caches the mm's entries
+flushes them when it next switches to the mm, because the batch moved
+the mm's tlb_gen.  With isolcpus=tlbbatch, use the IPIs for an mm that
+only ran on housekeeping CPUs, the test of consider_global_asid() under
+isolcpus=asid, so that the isolated CPUs keep their TLBs.  A batch with
+any other mm, one with a global ASID or with isolated CPUs in its
+mm_cpumask(), keeps the broadcast: no isolated CPU gets an IPI that it
+did not get before.  With isolcpus=asid as well, no mm that only ran on
+housekeeping CPUs has a global ASID, so all of them take the IPIs.
+
+The cost is IPIs among housekeeping CPUs instead of one broadcast.
+---
+--- a/include/linux/sched/isolation.h
++++ b/include/linux/sched/isolation.h
+@@ -35,6 +35,7 @@
+ 	ISOL_STRICT_ASID,
+ 	ISOL_STRICT_NODE,
+ 	ISOL_STRICT_NOASID,
++	ISOL_STRICT_TLBBATCH,
+ 	ISOL_STRICT_MAX
+ };
+ 
+--- a/kernel/sched/isolation.c
++++ b/kernel/sched/isolation.c
+@@ -30,6 +30,7 @@
+ nodemask_t isolcpus_strict_nodes __ro_after_init;
+ 
+ static const char * const isolcpus_strict_names[ISOL_STRICT_MAX] = {
++	[ISOL_STRICT_TLBBATCH]	= "tlbbatch",
+ 	[ISOL_STRICT_NOASID]	= "noasid",
+ 	[ISOL_STRICT_NODE]	= "node",
+ 	[ISOL_STRICT_ASID]	= "asid",
+--- a/arch/x86/include/asm/tlbbatch.h
++++ b/arch/x86/include/asm/tlbbatch.h
+@@ -11,7 +11,8 @@
+ 	 */
+ 	struct cpumask cpumask;
+ 	/*
+-	 * Set if pages were unmapped from any MM, even one that does not
++	 * Set if pages were unmapped from an MM that needs the INVLPGB
++	 * broadcast (see tlbbatch_needs_broadcast()), even one that does not
+ 	 * have active CPUs in its cpumask.
+ 	 */
+ 	bool unmapped_pages;
+--- a/arch/x86/include/asm/tlbflush.h
++++ b/arch/x86/include/asm/tlbflush.h
+@@ -347,12 +347,15 @@
+ 	return atomic64_inc_return(&mm->context.tlb_gen);
+ }
+ 
++extern bool tlbbatch_needs_broadcast(struct mm_struct *mm);
++
+ static inline void arch_tlbbatch_add_pending(struct arch_tlbflush_unmap_batch *batch,
+ 		struct mm_struct *mm, unsigned long start, unsigned long end)
+ {
+ 	inc_mm_tlb_gen(mm);
+ 	cpumask_or(&batch->cpumask, &batch->cpumask, mm_cpumask(mm));
+-	batch->unmapped_pages = true;
++	if (tlbbatch_needs_broadcast(mm))
++		batch->unmapped_pages = true;
+ 	mmu_notifier_arch_invalidate_secondary_tlbs(mm, 0, -1UL);
+ }
+ 
+--- a/arch/x86/mm/tlb.c
++++ b/arch/x86/mm/tlb.c
+@@ -1746,6 +1746,25 @@
+ }
+ EXPORT_SYMBOL_GPL(__flush_tlb_all);
+ 
++/*
++ * Does a batched unmap from @mm need the INVLPGB broadcast in
++ * arch_tlbbatch_flush()?  A global ASID is never flushed by the IPI path,
++ * so an mm with one does.  An mm without one is flushed correctly by IPIs
++ * to the batch's cpumask: a CPU outside it that still caches the mm's
++ * entries flushes them when it switches back to the mm, because
++ * inc_mm_tlb_gen() moved the generation.  With isolcpus=tlbbatch prefer
++ * the IPIs for an mm that only ran on housekeeping CPUs, the test of
++ * consider_global_asid() under isolcpus=asid, so that isolated CPUs keep
++ * their TLBs and get no interrupt.
++ */
++bool tlbbatch_needs_broadcast(struct mm_struct *mm)
++{
++	if (!isolcpus_strict_enabled(ISOL_STRICT_TLBBATCH) || mm_global_asid(mm))
++		return true;
++
++	return !cpumask_subset(mm_cpumask(mm), housekeeping_cpumask(HK_TYPE_DOMAIN));
++}
++
+ void arch_tlbbatch_flush(struct arch_tlbflush_unmap_batch *batch)
+ {
+ 	struct flush_tlb_info *info;

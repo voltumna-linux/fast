@@ -1,0 +1,45 @@
+Upstream-Status: Inappropriate
+
+From: Giulio Gaio <giulio.gaio@elettra.eu>
+Date: Wed, 3 Sep 2026 11:50:00 +0200
+Subject: [PATCH] sched/deadline: re-evaluate the nohz_full tick dependency when the fair server enters or leaves the DL tree
+
+On a nohz_full CPU that runs one SCHED_FIFO task at 100% and no runnable
+CFS task, the tick never stops and tick_stop reports dependency=SCHED.
+sched_can_stop_tick() is only re-evaluated from add_nr_running() and
+sub_nr_running(), which the fair server bypasses: inc_dl_tasks() and
+dec_dl_tasks() skip them for dl_server entities. So the SCHED bit set when
+the last CFS task dequeued while the server was on the tree is never
+cleared by dl_server_stop(), and the CPU keeps a 1 kHz tick forever.
+
+Re-evaluate the dependency on both transitions of the server. With the
+server armed the tick is required (dl_nr_running > 0); once the server
+leaves the tree the bit is cleared and the tick can stop again. Measured
+on an EPYC 9755 with 6.18.29: a FIFO poller alone on an isolated core took
+1001 ticks/s with the fair server enabled; disabling the server
+(runtime=0) stopped the tick but left CFS tasks landing on that core
+starved forever, including lru_add_drain_all() kworkers, which hung mbind().
+---
+ kernel/sched/deadline.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+--- a/kernel/sched/deadline.c
++++ b/kernel/sched/deadline.c
+@@ -2036,6 +2036,8 @@
+ 
+ 	if (!dl_server(dl_se))
+ 		add_nr_running(rq_of_dl_rq(dl_rq), 1);
++	else
++		sched_update_tick_dependency(rq_of_dl_rq(dl_rq));
+ 
+ 	inc_dl_deadline(dl_rq, deadline);
+ }
+@@ -2048,6 +2050,8 @@
+ 
+ 	if (!dl_server(dl_se))
+ 		sub_nr_running(rq_of_dl_rq(dl_rq), 1);
++	else
++		sched_update_tick_dependency(rq_of_dl_rq(dl_rq));
+ 
+ 	dec_dl_deadline(dl_rq, dl_se->deadline);
+ }

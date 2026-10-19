@@ -1,0 +1,17 @@
+Upstream-Status: Inappropriate
+
+Subject: [PATCH] sched/isolation: Log each strict isolcpus= flag at boot
+
+Print one line per strict flag accepted from isolcpus=, so the boot log
+shows which ones are in effect.
+---
+--- a/kernel/sched/isolation.c
++++ b/kernel/sched/isolation.c
+@@ -240,6 +240,7 @@ static int __init housekeeping_isolcpus_
+ 		}
+ 		if (i < ISOL_STRICT_MAX) {
+ 			__set_bit(i, &isolcpus_strict);
++			pr_info("isolcpus: Strict flag %s\n", isolcpus_strict_names[i]);
+ 			str += len + 1;
+ 			continue;
+ 		}

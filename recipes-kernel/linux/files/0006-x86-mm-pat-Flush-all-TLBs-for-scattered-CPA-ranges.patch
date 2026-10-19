@@ -1,0 +1,26 @@
+Upstream-Status: Inappropriate
+
+Subject: [PATCH] x86/mm/pat: Flush all TLBs for scattered CPA ranges
+
+cpa_flush() flushes the range starting at the first address for
+cpa->numpages pages.  With CPA_ARRAY and CPA_PAGES_ARRAY the addresses
+are not contiguous, so the other pages keep their old TLB entries.  The
+INVLPGB flush hides this today because it ignores the address, but the
+IPI-based flush already misses them, and so will INVLPGB once it honours
+the address.
+
+Flush everything for the array modes.  Upstream reverted the whole
+optimization instead (a39a7014825b), going back to IPIs for every small
+flush.
+---
+--- a/arch/x86/mm/pat/set_memory.c
++++ b/arch/x86/mm/pat/set_memory.c
+@@ -447,7 +447,7 @@ static void cpa_flush(struct cpa_data *cpa, int cache)
+ 
+ 	start = fix_addr(__cpa_addr(cpa, 0));
+ 	end =   start + cpa->numpages * PAGE_SIZE;
+-	if (cpa->force_flush_all)
++	if (cpa->force_flush_all || cpa->flags & (CPA_ARRAY | CPA_PAGES_ARRAY))
+ 		end = TLB_FLUSH_ALL;
+ 
+ 	flush_tlb_kernel_range(start, end);

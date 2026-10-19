@@ -1,0 +1,63 @@
+Upstream-Status: Inappropriate
+
+Subject: [PATCH] fork: Hand out pooled kernel stacks of the requested node
+
+The shared stack pool takes stacks from any CPU and hands them to any
+CPU, so a task can get a kernel stack whose pages sit on a remote node.
+
+Only pool a stack whose pages are on the node of the CPU freeing it,
+and hand out only a stack of the node alloc_thread_stack_node() asks
+for (the current node for NUMA_NO_NODE).
+---
+--- a/kernel/fork.c
++++ b/kernel/fork.c
+@@ -227,6 +227,10 @@
+ 			return true;
+ 	}
+ 
++	/* Only pool stacks that are local to the CPU freeing them */
++	if (page_to_nid(vm_area->pages[0]) != numa_node_id())
++		return false;
++
+ 	guard(raw_spinlock_irqsave)(&stack_pool_lock);
+ 	if (nr_pooled_stacks == NR_POOLED_STACKS)
+ 		return false;
+@@ -234,7 +238,7 @@
+ 	return true;
+ }
+ 
+-static struct vm_struct *get_cached_thread_stack(void)
++static struct vm_struct *get_cached_thread_stack(int node)
+ {
+ 	struct vm_struct *vm_area;
+ 	unsigned int i;
+@@ -245,8 +249,19 @@
+ 			return vm_area;
+ 	}
+ 
++	if (node == NUMA_NO_NODE)
++		node = numa_node_id();
++
++	/* The pool is shared by all nodes: hand out a stack of this node */
+ 	guard(raw_spinlock_irqsave)(&stack_pool_lock);
+-	return nr_pooled_stacks ? pooled_stacks[--nr_pooled_stacks] : NULL;
++	for (i = nr_pooled_stacks; i--; ) {
++		vm_area = pooled_stacks[i];
++		if (page_to_nid(vm_area->pages[0]) == node) {
++			pooled_stacks[i] = pooled_stacks[--nr_pooled_stacks];
++			return vm_area;
++		}
++	}
++	return NULL;
+ }
+ 
+ static void thread_stack_free_rcu(struct rcu_head *rh)
+@@ -312,7 +327,7 @@
+ 	struct vm_struct *vm_area;
+ 	void *stack;
+ 
+-	vm_area = get_cached_thread_stack();
++	vm_area = get_cached_thread_stack(node);
+ 	if (vm_area) {
+ 		if (memcg_charge_kernel_stack(vm_area)) {
+ 			vfree(vm_area->addr);

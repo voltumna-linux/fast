@@ -1,0 +1,39 @@
+Upstream-Status: Inappropriate
+
+Subject: [PATCH] x86/mm: Flush all TLBs when freeing kernel page tables
+
+pud_free_pmd_page() and pmd_free_pte_page() free page tables and expect
+flush_tlb_kernel_range() on the first page to drop the paging-structure
+caches.  That only holds today because the INVLPGB variant ignores the
+address and flushes everything; without INVLPGB it misses inactive PCIDs,
+and once the INVLPGB flush is limited to the range it misses the tables
+under the rest of the PUD.  Jann Horn reported both.
+
+Use flush_tlb_all(), which is what the INVLPGB case does now in effect.
+These paths only run when a huge vmap/ioremap mapping replaces smaller
+ones.
+---
+--- a/arch/x86/mm/pgtable.c
++++ b/arch/x86/mm/pgtable.c
+@@ -745,8 +745,8 @@ int pud_free_pmd_page(pud_t *pud, unsigned long addr)
+ 
+ 	pud_clear(pud);
+ 
+-	/* INVLPG to clear all paging-structure caches */
+-	flush_tlb_kernel_range(addr, addr + PAGE_SIZE-1);
++	/* Drop paging-structure caches for all the freed tables */
++	flush_tlb_all();
+ 
+ 	for (i = 0; i < PTRS_PER_PMD; i++) {
+ 		if (!pmd_none(pmd_sv[i])) {
+@@ -777,8 +777,8 @@ int pmd_free_pte_page(pmd_t *pmd, unsigned long addr)
+ 	pt = page_ptdesc(pmd_page(*pmd));
+ 	pmd_clear(pmd);
+ 
+-	/* INVLPG to clear all paging-structure caches */
+-	flush_tlb_kernel_range(addr, addr + PAGE_SIZE-1);
++	/* Drop paging-structure caches for the freed table */
++	flush_tlb_all();
+ 
+ 	pagetable_dtor_free(pt);
+ 
