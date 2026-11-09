@@ -82,11 +82,11 @@ def real_beam(config):
     write_knob(config, 'sr/diagnostics/ebpm/SynthSimBase', '')
 
 
-def write_verified(path, value):
+def write_verified(path, value, normalize=str):
     target = Path(path)
     target.write_text(str(value) + '\n')
     actual = target.read_text().strip()
-    if actual != str(value):
+    if normalize(actual) != normalize(str(value)):
         raise OperationError(f'{path}: expected {value!r}, read {actual!r}')
 
 
@@ -247,8 +247,9 @@ def x710(config):
     # The future cgroups must already be allocated. Use their configured CPU
     # sets rather than probing Tango processes to discover queue ownership.
     for queue in cfg['queues']:
-        write_verified(queue['xps_path'], queue['mask'])
-        write_verified(queue['irq_path'], queue['irq_cpus'])
+        write_verified(queue['xps_path'], queue['mask'],
+                       lambda value: int(value.replace(',', ''), 16))
+        write_verified(queue['irq_path'], queue['irq_cpus'], cpu_set)
     run(config, 'ethtool', '-X', cfg['interface'], 'equal', '1')
     actual = run(config, 'ethtool', '-x', cfg['interface'])
     rows = re.findall(r'^\s*\d+:\s+([\d\s]+)$', actual, re.MULTILINE)
