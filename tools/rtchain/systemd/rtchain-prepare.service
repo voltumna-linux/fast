@@ -1,0 +1,15 @@
+[Unit]
+Description=Prepare FAST machine resources before realtime producers
+Requires=rtchain.slice tango.slice
+After=local-fs.target remote-fs.target time-sync.target force-irq-affinity.service rtchain.slice tango.slice
+Wants=time-sync.target
+Before=rtchain-producers.target
+
+[Service]
+Type=oneshot
+Slice=rtchain.slice
+ExecStart=/usr/libexec/rtchain/rtchain-prepare
+RemainAfterExit=yes
+TimeoutStartSec=300
+LimitMEMLOCK=infinity
+UMask=0022

@@ -1,0 +1,37 @@
+#!/usr/bin/env python3
+"""Checked machine preparation. Run only before starting RT producers."""
+import argparse
+import os
+from pathlib import Path
+import runpy
+import sys
+
+from rtchain_config import load
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--config', type=Path)
+    args = parser.parse_args()
+    name = 'configuration'
+    try:
+        config, _ = load(args.config)
+        os.environ['LD_LIBRARY_PATH'] = ':'.join(config['library_path'])
+        ops = runpy.run_path(str(Path(__file__).with_name('rtchain-ops')))
+        # Do not let a missing executable cause a partially prepared machine.
+        for tool in config['tools'].values():
+            if not os.access(tool, os.X_OK):
+                raise ValueError(f'missing executable: {tool}')
+        for name in config['phases']['prepare']:
+            print(f'{name}: starting', flush=True)
+            ops['OPERATIONS'][name][1](config)
+            print(f'{name}: completed', flush=True)
+        print('machine prepared; producers and realtime readiness still required', flush=True)
+    except Exception as error:
+        print(f'rtchain-prepare: {name}: {error}', file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())
