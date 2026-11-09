@@ -1,0 +1,330 @@
+#!/usr/bin/env python3
+"""Independent FAST bring-up operations; no process launcher or teardown.
+
+Reference: bring-updown/common/{bringup_full,bringup_splitsix,catds/setup_banco_tbt}.sh.
+Host configuration is explicit; this command never loads historical variants.
+"""
+import argparse
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import socket
+import subprocess
+import sys
+
+
+class OperationError(Exception):
+    pass
+
+
+def run(config, name, *args, env=None):
+    tool = config.get('tools', {}).get(name, name)
+    if not shutil.which(tool):
+        raise OperationError(f'missing tool: {name} ({tool})')
+    result = subprocess.run([tool, *map(str, args)], text=True, stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, env=env)
+    if result.returncode:
+        raise OperationError(f'{name}: exit {result.returncode}: {result.stdout.strip()}')
+    return result.stdout.strip()
+
+
+def settings(config, operation):
+    if operation not in config:
+        raise OperationError(f'missing configuration: {operation}')
+    return config[operation]
+
+
+def knob(config, key, value=None):
+    args = [key] if value is None else [key, str(value)]
+    output = run(config, 'crudaknob', *args)
+    # The historical tool can exit zero for an unresolved key. Its successful
+    # read format is "<key> = <value>" (bringup_splitsix.sh [S6c]).
+    if value is not None:
+        return knob(config, key)
+    match = re.search(r'^' + re.escape(key) + r'\s*= ?(.*)$', output, re.MULTILINE)
+    if not match:
+        raise OperationError(f'crudaknob: unresolved or unreadable {key}: {output}')
+    return match[1]
+
+
+def write_knob(config, key, value):
+    actual = knob(config, key, value)
+    # Numeric leaves may be printed with a different precision.
+    if actual == str(value):
+        return
+    try:
+        if float(actual) == float(value):
+            return
+    except ValueError:
+        pass
+    raise OperationError(f'{key}: expected {value!r}, read {actual!r}')
+
+
+def master_knobs(config):
+    for key, value in settings(config, 'master-knobs')['values'].items():
+        write_knob(config, key, value)
+
+
+def naff_knobs(config):
+    cfg = settings(config, 'naff-knobs')
+    for base in cfg['bases']:
+        write_knob(config, base + '/common/PipelineStages', cfg['pipeline_stages'])
+        write_knob(config, base + '/common/SbDistLoNu', cfg['sideband_floor'])
+        for group in cfg['groups']:
+            write_knob(config, f'{base}/g{group}/WaterfallMask', cfg['waterfall_mask'])
+
+
+def real_beam(config):
+    # No simulator key, Tango database or simulator process is needed.
+    write_knob(config, 'sr/diagnostics/ebpm/SynthMode', '0')
+    write_knob(config, 'sr/diagnostics/ebpm/SynthSimBase', '')
+
+
+def write_verified(path, value):
+    target = Path(path)
+    target.write_text(str(value) + '\n')
+    actual = target.read_text().strip()
+    if actual != str(value):
+        raise OperationError(f'{path}: expected {value!r}, read {actual!r}')
+
+
+def hugepages(config):
+    for pool in settings(config, 'hugepages')['pools']:
+        write_verified(pool['path'], pool['count'])
+
+
+def mounts(config):
+    for mount in settings(config, 'mounts')['entries']:
+        target = mount['target']
+        Path(target).mkdir(parents=True, exist_ok=True)
+        # --mountpoint is exact: a parent NFS mount is not sufficient.
+        try:
+            fs = run(config, 'findmnt', '-n', '-o', 'FSTYPE', '--mountpoint', target)
+        except OperationError:
+            run(config, 'mount', '-t', mount['type'], '-o', mount['options'],
+                mount['source'], target)
+            fs = run(config, 'findmnt', '-n', '-o', 'FSTYPE', '--mountpoint', target)
+        if fs != mount['type']:
+            raise OperationError(f'{target}: expected {mount["type"]}, found {fs}')
+
+
+def libraries(config):
+    for node in settings(config, 'libraries')['nodes']:
+        # The external libhot tool owns NUMA placement, copies and fingerprints.
+        run(config, 'numactl', f'--cpunodebind={node}', f'--membind={node}',
+            config['tools']['libhot_setup'], node)
+        run(config, 'libhot_setup', node, '--verifica')
+
+
+def registry(config):
+    cfg = settings(config, 'registry')
+    fs = run(config, 'findmnt', '-n', '-o', 'FSTYPE', '--mountpoint', cfg['mount'])
+    if fs != 'hugetlbfs' or Path(cfg['path']).parent != Path(cfg['mount']):
+        raise OperationError('registry must be directly on the configured hugetlbfs mount')
+    run(config, 'numactl', f'--membind={cfg["node"]}', f'--cpunodebind={cfg["node"]}',
+        config['tools']['cruda_init'], '--shm-name', cfg['path'], '--shm-flags', 'h',
+        '--socket-id', cfg['node'])
+    if not Path(cfg['path']).is_file():
+        raise OperationError(f'registry not published: {cfg["path"]}')
+
+
+def kernel(config):
+    cfg = settings(config, 'kernel')
+    for module in cfg.get('unload_modules', []):
+        run(config, 'modprobe', '-r', module)
+    for module in cfg.get('load_modules', []):
+        run(config, 'modprobe', module)
+    for path, value in cfg.get('values', {}).items():
+        write_verified(path, value)
+
+
+def system_cpuset(config):
+    cfg = settings(config, 'system-cpuset')
+    for unit in cfg['units']:
+        if unit not in ('system.slice', 'user.slice', 'init.scope'):
+            raise OperationError(f'not a system confinement unit: {unit}')
+        run(config, 'systemctl', 'set-property', '--runtime', unit,
+            'AllowedCPUs=' + cfg['cpus'])
+        actual = run(config, 'systemctl', 'show', '-p', 'EffectiveCPUs', '--value', unit)
+        if cpu_set(actual) != cpu_set(cfg['cpus']):
+            raise OperationError(f'{unit}: effective CPUs {actual}, expected {cfg["cpus"]}')
+
+
+def cpu_set(value):
+    cpus = set()
+    for part in value.replace(' ', ',').split(','):
+        if part:
+            first, _, last = part.partition('-')
+            cpus.update(range(int(first), int(last or first) + 1))
+    return cpus
+
+
+def kernel_jail(config):
+    cfg = settings(config, 'kernel-jail')
+    run(config, 'kernel_jail', 'applica', cfg['cpus'], cfg['workqueue_cpus'])
+
+
+def network(config):
+    cfg = settings(config, 'network')
+    for interface in cfg['interfaces']:
+        run(config, 'ethtool', '-K', interface, 'tx-nocache-copy', 'on')
+        actual = run(config, 'ethtool', '-k', interface)
+        if not re.search(r'^tx-nocache-copy: on(?:\s|$)', actual, re.MULTILINE):
+            raise OperationError(f'{interface}: tx-nocache-copy not enabled')
+    # Route flush is a write-only trigger, not a value to read back.
+    Path(cfg['route_flush']).write_text('1\n')
+
+
+def e810(config):
+    cfg = settings(config, 'e810')
+    if not cfg['bdfs']:
+        raise OperationError('no E810 PCI functions configured')
+    if cfg.get('tph', False):
+        for bdf in cfg['bdfs']:
+            run(config, 'setpci', '-s', bdf, 'ECAP_TPH+8.l=0x100')
+            actual = run(config, 'setpci', '-s', bdf, 'ECAP_TPH+8.l')
+            if not int(actual, 16) & 0x100:
+                raise OperationError(f'{bdf}: TPH not enabled')
+    # dpdk_master_tune performs its own hardware read-back. Do not silently
+    # overwrite its saved state: these operations are for a fresh boot.
+    run(config, 'dpdk_master_tune', *cfg['bdfs'], *cfg['parameters'])
+
+
+def compaction(config):
+    run(config, 'disable_kcompact')
+
+
+def fair_server(config):
+    cfg = settings(config, 'fair-server')
+    if not cfg['runtime_paths'] or int(cfg['runtime_ns']) <= 0:
+        raise OperationError('fair-server requires runtime paths and a positive runtime; zero needs a watchdog integration')
+    for path in cfg['runtime_paths']:
+        write_verified(path, cfg['runtime_ns'])
+
+
+def tick_revalidate(config):
+    # Like historical [12], only userspace FIFO threads of the RT producers.
+    # No fixed CPU numbers, and never touch kernel migration threads.
+    count = 0
+    for process in Path('/proc').glob('[0-9]*'):
+        try:
+            if (process / 'comm').read_text().strip() not in (
+                    'dpdk_master', 'dpdk_ebpm', 'naff-ccd'):
+                continue
+            for thread in (process / 'task').iterdir():
+                tid = int(thread.name)
+                if os.sched_getscheduler(tid) != os.SCHED_FIFO:
+                    continue
+                priority = os.sched_getparam(tid).sched_priority
+                changed = priority - 1 if priority > 1 else 2
+                os.sched_setscheduler(tid, os.SCHED_FIFO, os.sched_param(changed))
+                try:
+                    count += 1
+                finally:
+                    os.sched_setscheduler(tid, os.SCHED_FIFO, os.sched_param(priority))
+        except FileNotFoundError:
+            continue  # A process exited while /proc was being enumerated.
+    if not count:
+        raise OperationError('no producer FIFO threads found for tick revalidation')
+
+
+def synthetic_beam(config):
+    cfg = settings(config, 'synthetic-beam')
+    # Presence of catds alone does not prove that it published its keys.
+    knob(config, cfg['sim_base'] + '__Qx')
+    base = 'sr/diagnostics/ebpm/'
+    for leaf, value in (
+            ('SynthSimBase', cfg['sim_base']), ('SynthActionJ', cfg['action_j']),
+            ('SynthNoiseNm', cfg['noise_nm']), ('SynthQs', cfg['qs']),
+            ('SynthMode', cfg['mode'])):
+        write_knob(config, base + leaf, value)
+
+
+def x710(config):
+    cfg = settings(config, 'x710')
+    # The future cgroups must already be allocated. Use their configured CPU
+    # sets rather than probing Tango processes to discover queue ownership.
+    for queue in cfg['queues']:
+        write_verified(queue['xps_path'], queue['mask'])
+        write_verified(queue['irq_path'], queue['irq_cpus'])
+    run(config, 'ethtool', '-X', cfg['interface'], 'equal', '1')
+    actual = run(config, 'ethtool', '-x', cfg['interface'])
+    rows = re.findall(r'^\s*\d+:\s+([\d\s]+)$', actual, re.MULTILINE)
+    if not rows or any(int(v) != 0 for row in rows for v in row.split()):
+        raise OperationError('X710 RSS table does not route all new flows to queue 0')
+
+
+def smart_rescan(config):
+    cfg = settings(config, 'smart-rescan')
+    if not cfg['devices'] or not cfg['tango_host']:
+        raise OperationError('explicit Tango database and tcbuf devices are required')
+    env = dict(os.environ, TANGO_HOST=cfg['tango_host'])
+    # Tango is imported only by this post-Starter operation, in a separate
+    # process. It never starts/restarts a server or invokes Init implicitly.
+    run(config, 'python3', '-c', '''import sys, tango
+for name in sys.argv[1:]:
+    device = tango.DeviceProxy(name)
+    device.set_timeout_millis(20000)
+    device.command_inout("SmartRescan")
+''', *cfg['devices'], env=env)
+
+
+OPERATIONS = {
+    'mounts': ('prepare', mounts),
+    'hugepages': ('prepare', hugepages),
+    'libraries': ('prepare', libraries),
+    'registry': ('prepare', registry),
+    'kernel': ('prepare', kernel),
+    'system-cpuset': ('prepare', system_cpuset),
+    'kernel-jail': ('prepare', kernel_jail),
+    'network': ('prepare', network),
+    'x710': ('prepare', x710),
+    'e810': ('live', e810),
+    'master-knobs': ('live', master_knobs),
+    'naff-knobs': ('live', naff_knobs),
+    'real-beam': ('live', real_beam),
+    'compaction': ('live', compaction),
+    'fair-server': ('live', fair_server),
+    'tick-revalidate': ('live', tick_revalidate),
+    'synthetic-beam': ('bench', synthetic_beam),
+    'smart-rescan': ('bench', smart_rescan),
+}
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--config', required=True, type=Path)
+    parser.add_argument('action', choices=('operation', 'phase'))
+    parser.add_argument('name')
+    args = parser.parse_args()
+    try:
+        config = json.loads(args.config.read_text())
+        if config['host'] != socket.gethostname().split('.')[0]:
+            raise OperationError(f"configuration is for {config['host']}, not this host")
+        names = ([args.name] if args.action == 'operation'
+                 else config['phases'][args.name])
+        if not names:
+            raise OperationError('empty phase: no operations configured')
+        # Validate the whole phase before executing its first operation.
+        for name in names:
+            if name not in OPERATIONS:
+                raise OperationError(f'unknown operation: {name}')
+            if args.action == 'phase' and OPERATIONS[name][0] != args.name:
+                raise OperationError(f'{name} does not belong to phase {args.name}')
+        for name in names:
+            try:
+                OPERATIONS[name][1](config)
+                print(f'{name}: completed', flush=True)
+            except (OperationError, OSError, KeyError, TypeError, ValueError) as error:
+                raise OperationError(f'{name}: {error}') from error
+        print(f'{args.name}: completed (operation results only)', flush=True)
+    except (OperationError, OSError, KeyError, TypeError, ValueError) as error:
+        print(f'rtchain-ops: {error}', file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())
