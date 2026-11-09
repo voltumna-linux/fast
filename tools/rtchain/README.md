@@ -3,7 +3,9 @@
 `rtchain-ops` separa le operazioni da `bring-updown` senza modificarlo o
 richiamare il suo bring-up. È il prefactoring del ticket locale 01;
 installazione, unit statiche, lancio dei produttori e readiness appartengono
-ai ticket 02–04. Non è un sostituto già distribuibile di `rtchain.service`.
+ai ticket 02–04. Il ticket 02 aggiunge ora il pacchetto e la preparazione
+statica descritti in [INSTALL.md](INSTALL.md); il lancio della catena rimane
+nei ticket successivi.
 Non avvia server Tango, non ferma processi e non rimuove memoria condivisa.
 
 Fonte di riferimento: repository `bring-updown`, commit
@@ -38,9 +40,10 @@ sono cercati nel PATH; quelli esterni vanno dichiarati esplicitamente.
 Non si interpretano comandi shell. Il file è configurazione amministrativa
 fidata: può indicare file sysfs/procfs e strumenti privilegiati.
 Non viene letto `machine.sh`, né importata la variante storica, né scelto un
-DB dal nome macchina. Nessuna ricetta installa configurazioni o abilita servizi
-in questo ticket. Differenze di NUMA, BDF, CPU, pool, filesystem, gruppi e DB
-vanno riportate esplicitamente nella configurazione dell'host dai ticket successivi.
+DB dal nome macchina. Il pacchetto del ticket 02 installa modelli inattivi;
+nessuna configurazione storica viene attivata. Differenze di NUMA, BDF, CPU,
+pool, filesystem, gruppi e DB vanno riportate esplicitamente nella
+configurazione dell'host.
 
 Schema delle sezioni (i percorsi elencati sono campi JSON, non valori attivi):
 

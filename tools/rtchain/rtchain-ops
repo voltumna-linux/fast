@@ -138,6 +138,12 @@ def kernel(config):
         run(config, 'modprobe', module)
     for path, value in cfg.get('values', {}).items():
         write_verified(path, value)
+    for path, value in cfg.get('selectors', {}).items():
+        # sysfs selectors return all choices, with the active one in brackets.
+        Path(path).write_text(str(value) + '\n')
+        actual = Path(path).read_text().strip()
+        if f'[{value}]' not in actual.split():
+            raise OperationError(f'{path}: selector {value!r} not active: {actual}')
 
 
 def system_cpuset(config):

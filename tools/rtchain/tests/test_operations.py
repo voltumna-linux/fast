@@ -192,6 +192,27 @@ Path(sys.argv[sys.argv.index('--shm-name') + 1]).write_text('registry fixture')
             worker.join(timeout=1)
             self.assertFalse(worker.is_alive())
 
+    def test_kernel_selector_checks_the_active_value_returned_by_sysfs(self):
+        for returned, success in [('always madvise [never]', True),
+                                  ('[always] madvise never', False)]:
+            with self.subTest(returned=returned):
+                path = self.root / ('selector-success' if success else 'selector-failure')
+                os.mkfifo(path)
+
+                def selector_file():
+                    with path.open() as stream:
+                        stream.read()
+                    with path.open('w') as stream:
+                        stream.write(returned + '\n')
+
+                worker = threading.Thread(target=selector_file, daemon=True)
+                worker.start()
+                self.config['kernel'] = {'selectors': {str(path): 'never'}}
+                result = self.run_ops('operation', 'kernel')
+                self.assertEqual(result.returncode == 0, success, result.stderr)
+                worker.join(timeout=1)
+                self.assertFalse(worker.is_alive())
+
 
 if __name__ == '__main__':
     unittest.main()

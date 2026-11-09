@@ -1,0 +1,6 @@
+[Unit]
+Description=FAST resources reserved for Tango servers
+
+[Slice]
+CPUAccounting=yes
+MemoryAccounting=yes

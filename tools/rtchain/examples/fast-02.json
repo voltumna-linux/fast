@@ -1,0 +1,111 @@
+{
+  "commissioned": false,
+  "requires_mounts_for": [
+    "/srv/fast/bin",
+    "/srv/fast/lib",
+    "/srv/fast/etc"
+  ],
+  "library_path": [
+    "/srv/fast/lib"
+  ],
+  "time_sync_units": [
+    "systemd-time-wait-sync.service"
+  ],
+  "tools": {
+    "libhot_setup": "/srv/fast/bin/libhot_setup.sh",
+    "cruda_init": "/srv/fast/bin/cruda_init",
+    "kernel_jail": "/srv/fast/bin/jail_kernel.py"
+  },
+  "phases": {
+    "prepare": [
+      "mounts",
+      "hugepages",
+      "libraries",
+      "registry",
+      "kernel",
+      "system-cpuset",
+      "kernel-jail",
+      "network",
+      "x710"
+    ]
+  },
+  "not_applicable": {},
+  "mounts": {
+    "entries": [
+      {
+        "target": "/run/rtchain-log",
+        "source": "tmpfs",
+        "type": "tmpfs",
+        "options": "mode=0755,size=128M"
+      },
+      {
+        "target": "/mnt/huge_cruda",
+        "source": "none",
+        "type": "hugetlbfs",
+        "options": "pagesize=2M,mode=0770,gid=REPLACE"
+      },
+      {
+        "target": "/run/libhot",
+        "source": "tmpfs",
+        "type": "tmpfs",
+        "options": "size=REPLACE,mpol=bind:REPLACE"
+      }
+    ]
+  },
+  "hugepages": {
+    "pools": [
+      {
+        "path": "/sys/devices/system/node/nodeREPLACE/hugepages/hugepages-2048kB/nr_hugepages",
+        "count": 0
+      }
+    ]
+  },
+  "libraries": {
+    "nodes": []
+  },
+  "registry": {
+    "mount": "/mnt/huge_cruda",
+    "path": "/mnt/huge_cruda/cruda",
+    "node": "REPLACE"
+  },
+  "kernel": {
+    "load_modules": [
+      "vfio-pci"
+    ],
+    "unload_modules": [],
+    "values": {},
+    "selectors": {}
+  },
+  "system-cpuset": {
+    "units": [
+      "system.slice",
+      "user.slice",
+      "init.scope"
+    ],
+    "cpus": "REPLACE"
+  },
+  "kernel-jail": {
+    "cpus": "REPLACE",
+    "workqueue_cpus": "REPLACE"
+  },
+  "network": {
+    "interfaces": [],
+    "route_flush": "/proc/sys/net/ipv4/route/flush"
+  },
+  "x710": {
+    "interface": "REPLACE",
+    "queues": []
+  },
+  "resources": {
+    "rtchain": {
+      "cpus": "REPLACE",
+      "memory_nodes": "REPLACE"
+    },
+    "tango": {
+      "cpus": "REPLACE",
+      "memory_nodes": "REPLACE"
+    }
+  },
+  "host": "fast-02",
+  "log_directory": "/run/rtchain-log"
+}

@@ -5,5 +5,5 @@ IMAGE_INSTALL:append = " os-install hwloc dmidecode starter \
         turbostat rt-tests iputils-ping iputils-arping \
         net-snmp-client net-snmp-mibs python3-netsnmp perf \
         libgccjit muparserx libtcc python3-scipy cpunoise \
-        dpdk dpdk-tools"
+        dpdk dpdk-tools fast-rtchain"
 

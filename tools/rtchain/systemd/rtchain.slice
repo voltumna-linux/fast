@@ -1,0 +1,6 @@
+[Unit]
+Description=FAST realtime resources outside system confinement
+
+[Slice]
+CPUAccounting=yes
+MemoryAccounting=yes

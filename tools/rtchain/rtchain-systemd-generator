@@ -1,0 +1,44 @@
+#!/usr/bin/env python3
+"""Declare mount/resource dependencies before the boot transaction is built."""
+import argparse
+from pathlib import Path
+import sys
+
+from rtchain_config import load
+
+
+def write(root, name, content):
+    target = root / name
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(content)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--config', type=Path)
+    parser.add_argument('normal', type=Path)
+    parser.add_argument('early', nargs='?')
+    parser.add_argument('late', nargs='?')
+    args = parser.parse_args()
+    try:
+        config, mounts = load(args.config)
+        write(args.normal, 'rtchain-prepare.service.d/50-host.conf',
+              '[Unit]\nRequiresMountsFor=' + ' '.join(mounts) + '\nRequires=' +
+              ' '.join(config['time_sync_units']) + '\nAfter=' +
+              ' '.join(config['time_sync_units']) + '\n')
+        for name in ('rtchain', 'tango'):
+            resource = config['resources'][name]
+            write(args.normal, f'{name}.slice.d/50-host.conf',
+                  '[Slice]\nAllowedCPUs=' + resource['cpus'] +
+                  '\nAllowedMemoryNodes=' + resource['memory_nodes'] + '\n')
+    except Exception as error:
+        print(f'rtchain-systemd-generator: {error}', file=sys.stderr)
+        # A generator exit failure alone does not fail a service transaction.
+        write(args.normal, 'rtchain-prepare.service.d/50-host.conf',
+              '[Service]\nExecStartPre=/bin/false\n')
+        return 1
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())
