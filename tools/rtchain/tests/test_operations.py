@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 
 CLI = Path(__file__).resolve().parents[1] / 'rtchain-ops'
@@ -49,7 +50,7 @@ print(key + ' = ' + values.get(key, '0'))
         config = self.root / 'host.json'
         config.write_text(json.dumps(self.config))
         return subprocess.run([sys.executable, str(CLI), '--config', str(config), *args],
-                              text=True, capture_output=True,
+                              text=True, capture_output=True, timeout=10,
                               env={**os.environ, 'FIXTURE': str(self.root), **env})
 
     def test_before_starter_uses_only_registry_with_no_tango_or_teardown(self):
@@ -128,6 +129,68 @@ sys.exit(7)
         record = json.loads((self.root / 'rescan').read_text())
         self.assertEqual(record, {'host': 'fixture-db:20001',
                                   'devices': ['tcbuf/test/fixture']})
+
+    def test_prepare_and_live_with_controlled_mount_pool_and_registry(self):
+        for name, body in {
+            'findmnt': '#!/bin/sh\nprintf "hugetlbfs\\n"\n',
+            'numactl': '''#!/usr/bin/env python3
+import subprocess, sys
+sys.exit(subprocess.call(sys.argv[3:]))
+''',
+            'cruda_init': '''#!/usr/bin/env python3
+from pathlib import Path
+import sys
+Path(sys.argv[sys.argv.index('--shm-name') + 1]).write_text('registry fixture')
+''',
+        }.items():
+            tool = self.root / name
+            tool.write_text(body)
+            tool.chmod(0o755)
+            self.config['tools'][name] = str(tool)
+        pool = self.root / 'nr_hugepages'
+        pool.write_text('0')
+        self.config['mounts'] = {'entries': [{'target': str(self.root), 'type': 'hugetlbfs',
+                                             'source': 'none', 'options': 'pagesize=2M'}]}
+        self.config['hugepages'] = {'pools': [{'path': str(pool), 'count': 17}]}
+        self.config['registry'] = {'mount': str(self.root),
+                                   'path': str(self.root / 'cruda'), 'node': 1}
+        self.config['phases']['prepare'] = ['mounts', 'hugepages', 'registry']
+        result = self.run_ops('phase', 'prepare')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((self.root / 'cruda').is_file())
+        result = self.run_ops('phase', 'live')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(pool.read_text().strip(), '17')
+
+    def test_x710_accepts_kernel_normalized_masks_and_cpu_lists(self):
+        ethtool = self.root / 'ethtool'
+        ethtool.write_text('#!/bin/sh\nif [ "$1" = "-x" ]; then printf "  0: 0 0 0 0\\n"; fi\n')
+        ethtool.chmod(0o755)
+        self.config['tools']['ethtool'] = str(ethtool)
+        xps = self.root / 'xps_cpus'
+        irq = self.root / 'smp_affinity_list'
+        workers = []
+
+        def kernel_file(path, normalized):
+            # A FIFO models sysfs accepting a write, then returning its
+            # canonical representation on the next read, across the CLI boundary.
+            with path.open() as stream:
+                stream.read()
+            with path.open('w') as stream:
+                stream.write(normalized + '\n')
+
+        for path, normalized in [(xps, '00000000,0000000f'), (irq, '2-3')]:
+            os.mkfifo(path)
+            worker = threading.Thread(target=kernel_file, args=(path, normalized), daemon=True)
+            worker.start()
+            workers.append(worker)
+        self.config['x710'] = {'interface': 'fixture0', 'queues': [
+            {'xps_path': str(xps), 'mask': 'f', 'irq_path': str(irq), 'irq_cpus': '2,3'}]}
+        result = self.run_ops('operation', 'x710')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for worker in workers:
+            worker.join(timeout=1)
+            self.assertFalse(worker.is_alive())
 
 
 if __name__ == '__main__':
