@@ -4,8 +4,8 @@
 richiamare il suo bring-up. È il prefactoring del ticket locale 01;
 installazione, unit statiche, lancio dei produttori e readiness appartengono
 ai ticket 02–04. Il ticket 02 aggiunge ora il pacchetto e la preparazione
-statica descritti in [INSTALL.md](INSTALL.md); il lancio della catena rimane
-nei ticket successivi.
+statica descritti in [INSTALL.md](INSTALL.md). Il ticket 03 integra TSC, sei
+master ed ebpm: unit e contratti sono descritti in [PRODUCERS.md](PRODUCERS.md).
 Non avvia server Tango, non ferma processi e non rimuove memoria condivisa.
 
 Fonte di riferimento: repository `bring-updown`, commit

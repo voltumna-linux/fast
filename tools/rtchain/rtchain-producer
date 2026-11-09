@@ -1,0 +1,41 @@
+#!/usr/bin/env python3
+"""Launch/check a FAST producer owned by its static systemd service."""
+import argparse
+from pathlib import Path
+import sys
+
+from rtchain_config import load
+import rtchain_producers as producers
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--config', type=Path)
+    commands = parser.add_subparsers(dest='command', required=True)
+    commands.add_parser('preflight')
+    commands.add_parser('live')
+    for action in ('launch', 'wait'):
+        command = commands.add_parser(action)
+        command.add_argument('name', choices=producers.NAMES)
+        if action == 'wait':
+            command.add_argument('--pid', type=int, required=True)
+    args = parser.parse_args()
+    try:
+        config, _ = load(args.config)
+        producers.validate(config)
+        if args.command in ('preflight', 'live'):
+            getattr(producers, args.command)(config)
+        elif args.command == 'launch':
+            producers.launch(config, args.name)
+        else:
+            if args.pid <= 0:
+                raise ValueError('positive MainPID required')
+            producers.wait(config, args.name, args.pid)
+    except Exception as error:
+        print(f'rtchain-producer: {args.command}: {error}', file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

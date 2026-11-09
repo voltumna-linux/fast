@@ -1,0 +1,12 @@
+[Unit]
+Description=FAST DPDK master for physical port %i
+Requires=rtchain-prepare.service rtchain-tsc.service
+After=rtchain-prepare.service rtchain-tsc.service
+
+[Service]
+Type=exec
+Slice=rtchain.slice
+ExecStart=/usr/libexec/rtchain/rtchain-producer launch master%i
+ExecStartPost=/usr/libexec/rtchain/rtchain-producer wait master%i --pid $MAINPID
+TimeoutStartSec=150
+LimitMEMLOCK=infinity

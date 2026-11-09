@@ -1,0 +1,12 @@
+[Unit]
+Description=FAST ebpm attached to all six DPDK masters
+Requires=rtchain-prepare.service rtchain-master@0.service rtchain-master@1.service rtchain-master@2.service rtchain-master@3.service rtchain-master@4.service rtchain-master@5.service
+After=rtchain-prepare.service rtchain-master@0.service rtchain-master@1.service rtchain-master@2.service rtchain-master@3.service rtchain-master@4.service rtchain-master@5.service
+
+[Service]
+Type=exec
+Slice=rtchain.slice
+ExecStart=/usr/libexec/rtchain/rtchain-producer launch ebpm
+ExecStartPost=/usr/libexec/rtchain/rtchain-producer wait ebpm --pid $MAINPID
+TimeoutStartSec=150
+LimitMEMLOCK=infinity

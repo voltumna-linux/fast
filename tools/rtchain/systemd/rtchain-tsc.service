@@ -1,0 +1,12 @@
+[Unit]
+Description=FAST shared TSC clock
+Requires=rtchain-prepare.service rtchain-producer-preflight.service
+After=rtchain-prepare.service rtchain-producer-preflight.service
+
+[Service]
+Type=exec
+Slice=rtchain.slice
+ExecStart=/usr/libexec/rtchain/rtchain-producer launch tsc
+ExecStartPost=/usr/libexec/rtchain/rtchain-producer wait tsc --pid $MAINPID
+TimeoutStartSec=150
+LimitMEMLOCK=infinity

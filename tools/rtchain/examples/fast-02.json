@@ -14,7 +14,12 @@
   "tools": {
     "libhot_setup": "/srv/fast/bin/libhot_setup.sh",
     "cruda_init": "/srv/fast/bin/cruda_init",
-    "kernel_jail": "/srv/fast/bin/jail_kernel.py"
+    "kernel_jail": "/srv/fast/bin/jail_kernel.py",
+    "numactl": "/usr/bin/numactl",
+    "libhot_run": "/srv/fast/bin/libhot_run.sh",
+    "dpdk_devbind": "/srv/fast/bin/dpdk-devbind.py",
+    "crudaknob": "/srv/fast/bin/crudaknob",
+    "dpdk_master_tune": "/srv/fast/bin/dpdk_master_tune"
   },
   "phases": {
     "prepare": [
@@ -107,5 +112,316 @@
     }
   },
   "host": "fast-02",
-  "log_directory": "/run/rtchain-log"
+  "log_directory": "/run/rtchain-log",
+  "producers": {
+    "tsc": {
+      "executable": "/runtime/bin/tsc_init",
+      "args": [],
+      "node": "REPLACE",
+      "cpus": "REPLACE",
+      "policy": "other",
+      "priority": 0,
+      "environment": {},
+      "files": [],
+      "ready_keys": [],
+      "ready_log": [],
+      "timeout": 90,
+      "shm": "/dev/shm/tsc_shm"
+    },
+    "masters": [
+      {
+        "executable": "/runtime/bin/dpdk_master",
+        "args": [],
+        "node": "REPLACE",
+        "cpus": "REPLACE",
+        "policy": "fifo",
+        "priority": 99,
+        "environment": {
+          "DPDK_CORE_LIST": "REPLACE",
+          "DPDK_RXPORT_CONFIG": "REPLACE",
+          "DPDK_TXPORT_CONFIG": "REPLACE"
+        },
+        "files": [],
+        "ready_keys": [
+          "sr/dpdkmaster/REPLACE_fast-02_0/REPLACE_WITH_PUBLISHED_KEY"
+        ],
+        "ready_log": [
+          "REPLACE_WITH_QUEUE_INITIALIZATION_EVIDENCE"
+        ],
+        "timeout": 90,
+        "port": 0,
+        "prefix": "REPLACE_fast-02_0",
+        "name": "REPLACE_fast-02_0",
+        "app_id": 40,
+        "bdf": "REPLACE_PCI_0",
+        "ip": "REPLACE_IP_0",
+        "shm": "/mnt/hugepages/dpdk_m_REPLACE_fast-02_0",
+        "eal": "/run/dpdk/REPLACE_fast-02_0",
+        "cruda_template": "/srv/fast/etc/fast-02/master_cruda.conf",
+        "control_cpus": "REPLACE",
+        "control_threads": [
+          "dpdk-intr",
+          "dpdk-mp-msg"
+        ],
+        "devargs": "REPLACE_WITH_QUALIFIED_ICE_DEVARGS"
+      },
+      {
+        "executable": "/runtime/bin/dpdk_master",
+        "args": [],
+        "node": "REPLACE",
+        "cpus": "REPLACE",
+        "policy": "fifo",
+        "priority": 99,
+        "environment": {
+          "DPDK_CORE_LIST": "REPLACE",
+          "DPDK_RXPORT_CONFIG": "REPLACE",
+          "DPDK_TXPORT_CONFIG": "REPLACE"
+        },
+        "files": [],
+        "ready_keys": [
+          "sr/dpdkmaster/REPLACE_fast-02_1/REPLACE_WITH_PUBLISHED_KEY"
+        ],
+        "ready_log": [
+          "REPLACE_WITH_QUEUE_INITIALIZATION_EVIDENCE"
+        ],
+        "timeout": 90,
+        "port": 1,
+        "prefix": "REPLACE_fast-02_1",
+        "name": "REPLACE_fast-02_1",
+        "app_id": 41,
+        "bdf": "REPLACE_PCI_1",
+        "ip": "REPLACE_IP_1",
+        "shm": "/mnt/hugepages/dpdk_m_REPLACE_fast-02_1",
+        "eal": "/run/dpdk/REPLACE_fast-02_1",
+        "cruda_template": "/srv/fast/etc/fast-02/master_cruda.conf",
+        "control_cpus": "REPLACE",
+        "control_threads": [
+          "dpdk-intr",
+          "dpdk-mp-msg"
+        ],
+        "devargs": "REPLACE_WITH_QUALIFIED_ICE_DEVARGS"
+      },
+      {
+        "executable": "/runtime/bin/dpdk_master",
+        "args": [],
+        "node": "REPLACE",
+        "cpus": "REPLACE",
+        "policy": "fifo",
+        "priority": 99,
+        "environment": {
+          "DPDK_CORE_LIST": "REPLACE",
+          "DPDK_RXPORT_CONFIG": "REPLACE",
+          "DPDK_TXPORT_CONFIG": "REPLACE"
+        },
+        "files": [],
+        "ready_keys": [
+          "sr/dpdkmaster/REPLACE_fast-02_2/REPLACE_WITH_PUBLISHED_KEY"
+        ],
+        "ready_log": [
+          "REPLACE_WITH_QUEUE_INITIALIZATION_EVIDENCE"
+        ],
+        "timeout": 90,
+        "port": 2,
+        "prefix": "REPLACE_fast-02_2",
+        "name": "REPLACE_fast-02_2",
+        "app_id": 42,
+        "bdf": "REPLACE_PCI_2",
+        "ip": "REPLACE_IP_2",
+        "shm": "/mnt/hugepages/dpdk_m_REPLACE_fast-02_2",
+        "eal": "/run/dpdk/REPLACE_fast-02_2",
+        "cruda_template": "/srv/fast/etc/fast-02/master_cruda.conf",
+        "control_cpus": "REPLACE",
+        "control_threads": [
+          "dpdk-intr",
+          "dpdk-mp-msg"
+        ],
+        "devargs": "REPLACE_WITH_QUALIFIED_ICE_DEVARGS"
+      },
+      {
+        "executable": "/runtime/bin/dpdk_master",
+        "args": [],
+        "node": "REPLACE",
+        "cpus": "REPLACE",
+        "policy": "fifo",
+        "priority": 99,
+        "environment": {
+          "DPDK_CORE_LIST": "REPLACE",
+          "DPDK_RXPORT_CONFIG": "REPLACE",
+          "DPDK_TXPORT_CONFIG": "REPLACE"
+        },
+        "files": [],
+        "ready_keys": [
+          "sr/dpdkmaster/REPLACE_fast-02_3/REPLACE_WITH_PUBLISHED_KEY"
+        ],
+        "ready_log": [
+          "REPLACE_WITH_QUEUE_INITIALIZATION_EVIDENCE"
+        ],
+        "timeout": 90,
+        "port": 3,
+        "prefix": "REPLACE_fast-02_3",
+        "name": "REPLACE_fast-02_3",
+        "app_id": 43,
+        "bdf": "REPLACE_PCI_3",
+        "ip": "REPLACE_IP_3",
+        "shm": "/mnt/hugepages/dpdk_m_REPLACE_fast-02_3",
+        "eal": "/run/dpdk/REPLACE_fast-02_3",
+        "cruda_template": "/srv/fast/etc/fast-02/master_cruda.conf",
+        "control_cpus": "REPLACE",
+        "control_threads": [
+          "dpdk-intr",
+          "dpdk-mp-msg"
+        ],
+        "devargs": "REPLACE_WITH_QUALIFIED_ICE_DEVARGS"
+      },
+      {
+        "executable": "/runtime/bin/dpdk_master",
+        "args": [],
+        "node": "REPLACE",
+        "cpus": "REPLACE",
+        "policy": "fifo",
+        "priority": 99,
+        "environment": {
+          "DPDK_CORE_LIST": "REPLACE",
+          "DPDK_RXPORT_CONFIG": "REPLACE",
+          "DPDK_TXPORT_CONFIG": "REPLACE"
+        },
+        "files": [],
+        "ready_keys": [
+          "sr/dpdkmaster/REPLACE_fast-02_4/REPLACE_WITH_PUBLISHED_KEY"
+        ],
+        "ready_log": [
+          "REPLACE_WITH_QUEUE_INITIALIZATION_EVIDENCE"
+        ],
+        "timeout": 90,
+        "port": 4,
+        "prefix": "REPLACE_fast-02_4",
+        "name": "REPLACE_fast-02_4",
+        "app_id": 44,
+        "bdf": "REPLACE_PCI_4",
+        "ip": "REPLACE_IP_4",
+        "shm": "/mnt/hugepages/dpdk_m_REPLACE_fast-02_4",
+        "eal": "/run/dpdk/REPLACE_fast-02_4",
+        "cruda_template": "/srv/fast/etc/fast-02/master_cruda.conf",
+        "control_cpus": "REPLACE",
+        "control_threads": [
+          "dpdk-intr",
+          "dpdk-mp-msg"
+        ],
+        "devargs": "REPLACE_WITH_QUALIFIED_ICE_DEVARGS"
+      },
+      {
+        "executable": "/runtime/bin/dpdk_master",
+        "args": [],
+        "node": "REPLACE",
+        "cpus": "REPLACE",
+        "policy": "fifo",
+        "priority": 99,
+        "environment": {
+          "DPDK_CORE_LIST": "REPLACE",
+          "DPDK_RXPORT_CONFIG": "REPLACE",
+          "DPDK_TXPORT_CONFIG": "REPLACE"
+        },
+        "files": [],
+        "ready_keys": [
+          "sr/dpdkmaster/REPLACE_fast-02_5/REPLACE_WITH_PUBLISHED_KEY"
+        ],
+        "ready_log": [
+          "REPLACE_WITH_QUEUE_INITIALIZATION_EVIDENCE"
+        ],
+        "timeout": 90,
+        "port": 5,
+        "prefix": "REPLACE_fast-02_5",
+        "name": "REPLACE_fast-02_5",
+        "app_id": 45,
+        "bdf": "REPLACE_PCI_5",
+        "ip": "REPLACE_IP_5",
+        "shm": "/mnt/hugepages/dpdk_m_REPLACE_fast-02_5",
+        "eal": "/run/dpdk/REPLACE_fast-02_5",
+        "cruda_template": "/srv/fast/etc/fast-02/master_cruda.conf",
+        "control_cpus": "REPLACE",
+        "control_threads": [
+          "dpdk-intr",
+          "dpdk-mp-msg"
+        ],
+        "devargs": "REPLACE_WITH_QUALIFIED_ICE_DEVARGS"
+      }
+    ],
+    "ebpm": {
+      "executable": "/runtime/bin/dpdk_ebpm",
+      "args": [],
+      "node": "REPLACE",
+      "cpus": "REPLACE",
+      "policy": "fifo",
+      "priority": 99,
+      "environment": {
+        "DPDK_EBPM_TX_SYNTH": "REPLACE_0_OR_1",
+        "DPDK_LIBRARY_PATH": "/runtime/lib/libdpdk_ebpm.so",
+        "DPDK_RX_FUNC_NAME": "dpdk_ebpm_rx_handler",
+        "DPDK_INIT_FUNC_NAME": "dpdk_ebpm_slave_init_handler"
+      },
+      "files": [
+        "/runtime/lib/libdpdk_ebpm.so"
+      ],
+      "ready_keys": [],
+      "ready_log": [
+        "running"
+      ],
+      "timeout": 90,
+      "shm": "/mnt/hugepages/dpdk_ebpm",
+      "calibration_base": "/srv/fast/etc/fast-02/bpm",
+      "cruda_conf": "/srv/fast/etc/fast-02/ebpm_cruda.conf",
+      "catalog_units": 0,
+      "units_per_port": 0,
+      "fill_id": 2,
+      "drain_id": 7
+    },
+    "common_environment": {
+      "DPDK_EBPM_NT_BATCH": "REPLACE",
+      "DPDK_EBPM_LIGHTBUF": "REPLACE",
+      "DPDK_EBPM_LB_CAP": "REPLACE",
+      "DPDK_EAL_EXTRA": "REPLACE",
+      "DPDK_PROMISCUOUS": "REPLACE",
+      "DPDK_PORT_MTU": "REPLACE",
+      "DPDK_RX_FREE_THRESH": "REPLACE",
+      "DPDK_RX_BURST": "REPLACE"
+    },
+    "free_hugepages": [
+      {
+        "path": "/sys/devices/system/node/nodeREPLACE/hugepages/hugepages-1048576kB/free_hugepages",
+        "count": 0
+      }
+    ],
+    "pci_root": "/sys/bus/pci/devices",
+    "live": [
+      "e810",
+      "master-knobs"
+    ],
+    "not_applicable": {
+      "tx-rate": "REPLACE_WITH_HOST_SPECIFIC_REASON_OR_SELECT_OPERATION"
+    }
+  },
+  "e810": {
+    "bdfs": [
+      "REPLACE_PCI_0",
+      "REPLACE_PCI_1",
+      "REPLACE_PCI_2",
+      "REPLACE_PCI_3",
+      "REPLACE_PCI_4",
+      "REPLACE_PCI_5"
+    ],
+    "tph": true,
+    "parameters": [
+      "REPLACE"
+    ]
+  },
+  "master-knobs": {
+    "values": {
+      "sr/dpdkmaster/REPLACE_fast-02_0/REPLACE_WITH_KNOB": "REPLACE",
+      "sr/dpdkmaster/REPLACE_fast-02_1/REPLACE_WITH_KNOB": "REPLACE",
+      "sr/dpdkmaster/REPLACE_fast-02_2/REPLACE_WITH_KNOB": "REPLACE",
+      "sr/dpdkmaster/REPLACE_fast-02_3/REPLACE_WITH_KNOB": "REPLACE",
+      "sr/dpdkmaster/REPLACE_fast-02_4/REPLACE_WITH_KNOB": "REPLACE",
+      "sr/dpdkmaster/REPLACE_fast-02_5/REPLACE_WITH_KNOB": "REPLACE"
+    }
+  }
 }

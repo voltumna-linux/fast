@@ -1,10 +1,11 @@
 # Preparazione statica della macchina FAST
 
 Il pacchetto `fast-rtchain` è incluso nelle immagini runtime e sviluppo FAST.
-Installa gli strumenti Python, tre unit statiche e una barriera target, il
+Installa gli strumenti Python, le unit statiche e la barriera target, il
 generatore delle dipendenze dell'host e journald volatile con limite 128 MiB.
-Non abilita il bring-up storico. I produttori, la readiness e Starter saranno
-integrati dai ticket 03–07; questa preparazione da sola non avvia la catena.
+Non abilita il bring-up storico. TSC, sei master ed ebpm sono integrati dal ticket 03, come descritto in
+[PRODUCERS.md](PRODUCERS.md); readiness finale e Starter restano nei ticket
+successivi. La sola unit prepare non avvia la catena.
 
 ## Configurazione dell'host
 
@@ -88,8 +89,9 @@ operazione prepare occorre selezionarla oppure scrivere una motivazione in
   X710 segue questo passo, con tutte le code comprese quelle da azzerare e
   assegnazioni ricavate dai futuri profili CPU, senza interrogare PID Tango.
 
-E810 TPH/tuning dopo inizializzazione EAL, compaction, fair server e
-tick-revalidate restano in `live`, dopo i produttori (ticket 03–04). Il runtime
+E810 TPH/tuning dopo inizializzazione EAL sono integrati nella fase produttori
+del ticket 03. Compaction, fair server e tick-revalidate restano dopo i naff
+nel ticket 04. Il runtime
 fair server deve restare positivo: zero, stop dei servizi e watchdog storici
 non sono varianti supportate da questa preparazione. Non si attivano watchdog
 RAM o processi residenti senza un contratto di supervisione. Il binding VFIO
@@ -107,10 +109,10 @@ journalctl -b -u rtchain-prepare.service
 systemctl cat rtchain-prepare.service rtchain.slice tango.slice
 ```
 
-Le unit sono statiche: non eseguire `enable`. Le future unit dei produttori
+Le unit sono statiche: non eseguire `enable`. Le unit dei produttori
 devono avere `Requires=rtchain-prepare.service` e
 `After=rtchain-prepare.service` e usare `Slice=rtchain.slice`. Il target
-`rtchain-producers.target` espone la stessa barriera per l'avvio manuale;
+`rtchain-producers.target` richiede ora anche TSC, sei master, ebpm e tuning;
 raggruppare unit sotto un target non sostituisce il requisito nel produttore.
 Un mount richiesto fallito impedisce l'esecuzione del comando; un errore
 obbligatorio restituisce stato fallito e identifica fase e causa nei log.
