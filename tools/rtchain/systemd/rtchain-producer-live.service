@@ -1,0 +1,12 @@
+[Unit]
+Description=Complete mandatory FAST producer hardware settings
+Requires=rtchain-prepare.service rtchain-tsc.service rtchain-ebpm.service rtchain-master@0.service rtchain-master@1.service rtchain-master@2.service rtchain-master@3.service rtchain-master@4.service rtchain-master@5.service
+After=rtchain-prepare.service rtchain-tsc.service rtchain-ebpm.service rtchain-master@0.service rtchain-master@1.service rtchain-master@2.service rtchain-master@3.service rtchain-master@4.service rtchain-master@5.service
+
+[Service]
+Type=oneshot
+Slice=rtchain.slice
+ExecStart=/usr/libexec/rtchain/rtchain-producer live
+RemainAfterExit=yes
+TimeoutStartSec=300
+LimitMEMLOCK=infinity

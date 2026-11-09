@@ -5,6 +5,7 @@ from pathlib import Path
 import sys
 
 from rtchain_config import load
+import rtchain_producers
 
 
 def write(root, name, content):
@@ -37,6 +38,14 @@ def main():
         write(args.normal, 'rtchain-prepare.service.d/50-host.conf',
               '[Service]\nExecStartPre=/bin/false\n')
         return 1
+    if 'producers' in config:
+        try:
+            rtchain_producers.generate(config, args.normal)
+        except Exception as error:
+            print(f'rtchain-systemd-generator: producers: {error}', file=sys.stderr)
+            write(args.normal, 'rtchain-producer-preflight.service.d/60-producer.conf',
+                  '[Service]\nExecStartPre=/bin/false\n')
+            return 1
     return 0
 
 

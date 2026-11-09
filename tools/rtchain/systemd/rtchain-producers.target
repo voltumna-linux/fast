@@ -1,4 +1,4 @@
 [Unit]
-Description=FAST machine preparation barrier for realtime producers
-Requires=rtchain-prepare.service
-After=rtchain-prepare.service
+Description=FAST TSC, six masters and ebpm startup barrier
+Requires=rtchain-prepare.service rtchain-producer-live.service
+After=rtchain-prepare.service rtchain-producer-live.service
