@@ -1,0 +1,12 @@
+[Unit]
+Description=Certify FAST realtime readiness before Tango consumers
+Requires=rtchain-prepare.service rtchain-producer-live.service rtchain-final-live.service rtchain-naff@1.service rtchain-naff@9.service rtchain-naff@17.service rtchain-naff@25.service rtchain-naff@33.service rtchain-naff@41.service rtchain-naff@49.service rtchain-naff@57.service rtchain-naff@65.service rtchain-naff@73.service rtchain-naff@81.service rtchain-naff@89.service
+After=rtchain-prepare.service rtchain-producer-live.service rtchain-final-live.service rtchain-naff@1.service rtchain-naff@9.service rtchain-naff@17.service rtchain-naff@25.service rtchain-naff@33.service rtchain-naff@41.service rtchain-naff@49.service rtchain-naff@57.service rtchain-naff@65.service rtchain-naff@73.service rtchain-naff@81.service rtchain-naff@89.service
+
+[Service]
+Type=oneshot
+Slice=rtchain.slice
+ExecStart=/usr/libexec/rtchain/rtchain-ready check
+RemainAfterExit=yes
+TimeoutStartSec=300
+LimitMEMLOCK=infinity

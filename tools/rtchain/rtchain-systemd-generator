@@ -6,6 +6,7 @@ import sys
 
 from rtchain_config import load
 import rtchain_producers
+import rtchain_readiness
 
 
 def write(root, name, content):
@@ -41,6 +42,8 @@ def main():
     if 'producers' in config:
         try:
             rtchain_producers.generate(config, args.normal)
+            if 'naffs' in config['producers'] or 'readiness' in config:
+                rtchain_readiness.generate(config, args.normal)
         except Exception as error:
             print(f'rtchain-systemd-generator: producers: {error}', file=sys.stderr)
             write(args.normal, 'rtchain-producer-preflight.service.d/60-producer.conf',

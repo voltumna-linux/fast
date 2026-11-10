@@ -1,0 +1,14 @@
+[Unit]
+Description=FAST naff group %i with verified published resources
+Requires=rtchain-producer-live.service rtchain-ebpm.service
+After=rtchain-producer-live.service rtchain-ebpm.service
+
+[Service]
+Type=exec
+Slice=rtchain.slice
+ExecStart=/usr/libexec/rtchain/rtchain-producer launch naff%i
+ExecStartPost=/usr/libexec/rtchain/rtchain-producer wait naff%i --pid $MAINPID
+# Retain the historical separation of starts even after early publication.
+ExecStartPost=/bin/sleep 2
+TimeoutStartSec=150
+LimitMEMLOCK=infinity

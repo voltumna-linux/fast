@@ -19,7 +19,9 @@
     "libhot_run": "/srv/fast/bin/libhot_run.sh",
     "dpdk_devbind": "/srv/fast/bin/dpdk-devbind.py",
     "crudaknob": "/srv/fast/bin/crudaknob",
-    "dpdk_master_tune": "/srv/fast/bin/dpdk_master_tune"
+    "dpdk_master_tune": "/srv/fast/bin/dpdk_master_tune",
+    "rtchain_probe": "/srv/fast/bin/rtchain-data-probe",
+    "disable_kcompact": "/srv/fast/bin/disable_kcompact.sh"
   },
   "phases": {
     "prepare": [
@@ -398,7 +400,285 @@
     ],
     "not_applicable": {
       "tx-rate": "REPLACE_WITH_HOST_SPECIFIC_REASON_OR_SELECT_OPERATION"
-    }
+    },
+    "naffs": [
+      {
+        "executable": "/runtime/bin/naff-ccd",
+        "args": [],
+        "node": "REPLACE",
+        "cpus": "REPLACE",
+        "policy": "fifo",
+        "priority": 1,
+        "environment": {
+          "NAFF_CCD_PREFIX": "REPLACE_WITH_QUALIFIED_FLEET_PREFIX",
+          "REPLACE_WITH_PERIOD_VARIABLE": "REPLACE_WITH_HOST_PERIOD"
+        },
+        "files": [],
+        "ready_keys": [
+          "sr/diagnostics/naff/g1/REPLACE_WITH_PUBLISHED_KEY"
+        ],
+        "ready_log": [
+          "spectrum ring labelled",
+          "REPLACE_WITH_GROUP_INITIALIZATION_EVIDENCE"
+        ],
+        "timeout": 90,
+        "shm": "/mnt/hugepages2m/naff",
+        "group": 1
+      },
+      {
+        "executable": "/runtime/bin/naff-ccd",
+        "args": [],
+        "node": "REPLACE",
+        "cpus": "REPLACE",
+        "policy": "fifo",
+        "priority": 1,
+        "environment": {
+          "NAFF_CCD_PREFIX": "REPLACE_WITH_QUALIFIED_FLEET_PREFIX",
+          "REPLACE_WITH_PERIOD_VARIABLE": "REPLACE_WITH_HOST_PERIOD"
+        },
+        "files": [],
+        "ready_keys": [
+          "sr/diagnostics/naff/g9/REPLACE_WITH_PUBLISHED_KEY"
+        ],
+        "ready_log": [
+          "spectrum ring labelled",
+          "REPLACE_WITH_GROUP_INITIALIZATION_EVIDENCE"
+        ],
+        "timeout": 90,
+        "shm": "/mnt/hugepages2m/naff",
+        "group": 9
+      },
+      {
+        "executable": "/runtime/bin/naff-ccd",
+        "args": [],
+        "node": "REPLACE",
+        "cpus": "REPLACE",
+        "policy": "fifo",
+        "priority": 1,
+        "environment": {
+          "NAFF_CCD_PREFIX": "REPLACE_WITH_QUALIFIED_FLEET_PREFIX",
+          "REPLACE_WITH_PERIOD_VARIABLE": "REPLACE_WITH_HOST_PERIOD"
+        },
+        "files": [],
+        "ready_keys": [
+          "sr/diagnostics/naff/g17/REPLACE_WITH_PUBLISHED_KEY"
+        ],
+        "ready_log": [
+          "spectrum ring labelled",
+          "REPLACE_WITH_GROUP_INITIALIZATION_EVIDENCE"
+        ],
+        "timeout": 90,
+        "shm": "/mnt/hugepages2m/naff",
+        "group": 17
+      },
+      {
+        "executable": "/runtime/bin/naff-ccd",
+        "args": [],
+        "node": "REPLACE",
+        "cpus": "REPLACE",
+        "policy": "fifo",
+        "priority": 1,
+        "environment": {
+          "NAFF_CCD_PREFIX": "REPLACE_WITH_QUALIFIED_FLEET_PREFIX",
+          "REPLACE_WITH_PERIOD_VARIABLE": "REPLACE_WITH_HOST_PERIOD"
+        },
+        "files": [],
+        "ready_keys": [
+          "sr/diagnostics/naff/g25/REPLACE_WITH_PUBLISHED_KEY"
+        ],
+        "ready_log": [
+          "spectrum ring labelled",
+          "REPLACE_WITH_GROUP_INITIALIZATION_EVIDENCE"
+        ],
+        "timeout": 90,
+        "shm": "/mnt/hugepages2m/naff",
+        "group": 25
+      },
+      {
+        "executable": "/runtime/bin/naff-ccd",
+        "args": [],
+        "node": "REPLACE",
+        "cpus": "REPLACE",
+        "policy": "fifo",
+        "priority": 1,
+        "environment": {
+          "NAFF_CCD_PREFIX": "REPLACE_WITH_QUALIFIED_FLEET_PREFIX",
+          "REPLACE_WITH_PERIOD_VARIABLE": "REPLACE_WITH_HOST_PERIOD"
+        },
+        "files": [],
+        "ready_keys": [
+          "sr/diagnostics/naff/g33/REPLACE_WITH_PUBLISHED_KEY"
+        ],
+        "ready_log": [
+          "spectrum ring labelled",
+          "REPLACE_WITH_GROUP_INITIALIZATION_EVIDENCE"
+        ],
+        "timeout": 90,
+        "shm": "/mnt/hugepages2m/naff",
+        "group": 33
+      },
+      {
+        "executable": "/runtime/bin/naff-ccd",
+        "args": [],
+        "node": "REPLACE",
+        "cpus": "REPLACE",
+        "policy": "fifo",
+        "priority": 1,
+        "environment": {
+          "NAFF_CCD_PREFIX": "REPLACE_WITH_QUALIFIED_FLEET_PREFIX",
+          "REPLACE_WITH_PERIOD_VARIABLE": "REPLACE_WITH_HOST_PERIOD"
+        },
+        "files": [],
+        "ready_keys": [
+          "sr/diagnostics/naff/g41/REPLACE_WITH_PUBLISHED_KEY"
+        ],
+        "ready_log": [
+          "spectrum ring labelled",
+          "REPLACE_WITH_GROUP_INITIALIZATION_EVIDENCE"
+        ],
+        "timeout": 90,
+        "shm": "/mnt/hugepages2m/naff",
+        "group": 41
+      },
+      {
+        "executable": "/runtime/bin/naff-ccd",
+        "args": [],
+        "node": "REPLACE",
+        "cpus": "REPLACE",
+        "policy": "fifo",
+        "priority": 1,
+        "environment": {
+          "NAFF_CCD_PREFIX": "REPLACE_WITH_QUALIFIED_FLEET_PREFIX",
+          "REPLACE_WITH_PERIOD_VARIABLE": "REPLACE_WITH_HOST_PERIOD"
+        },
+        "files": [],
+        "ready_keys": [
+          "sr/diagnostics/naff/g49/REPLACE_WITH_PUBLISHED_KEY"
+        ],
+        "ready_log": [
+          "spectrum ring labelled",
+          "REPLACE_WITH_GROUP_INITIALIZATION_EVIDENCE"
+        ],
+        "timeout": 90,
+        "shm": "/mnt/hugepages2m/naff",
+        "group": 49
+      },
+      {
+        "executable": "/runtime/bin/naff-ccd",
+        "args": [],
+        "node": "REPLACE",
+        "cpus": "REPLACE",
+        "policy": "fifo",
+        "priority": 1,
+        "environment": {
+          "NAFF_CCD_PREFIX": "REPLACE_WITH_QUALIFIED_FLEET_PREFIX",
+          "REPLACE_WITH_PERIOD_VARIABLE": "REPLACE_WITH_HOST_PERIOD"
+        },
+        "files": [],
+        "ready_keys": [
+          "sr/diagnostics/naff/g57/REPLACE_WITH_PUBLISHED_KEY"
+        ],
+        "ready_log": [
+          "spectrum ring labelled",
+          "REPLACE_WITH_GROUP_INITIALIZATION_EVIDENCE"
+        ],
+        "timeout": 90,
+        "shm": "/mnt/hugepages2m/naff",
+        "group": 57
+      },
+      {
+        "executable": "/runtime/bin/naff-ccd",
+        "args": [],
+        "node": "REPLACE",
+        "cpus": "REPLACE",
+        "policy": "fifo",
+        "priority": 1,
+        "environment": {
+          "NAFF_CCD_PREFIX": "REPLACE_WITH_QUALIFIED_FLEET_PREFIX",
+          "REPLACE_WITH_PERIOD_VARIABLE": "REPLACE_WITH_HOST_PERIOD"
+        },
+        "files": [],
+        "ready_keys": [
+          "sr/diagnostics/naff/g65/REPLACE_WITH_PUBLISHED_KEY"
+        ],
+        "ready_log": [
+          "spectrum ring labelled",
+          "REPLACE_WITH_GROUP_INITIALIZATION_EVIDENCE"
+        ],
+        "timeout": 90,
+        "shm": "/mnt/hugepages2m/naff",
+        "group": 65
+      },
+      {
+        "executable": "/runtime/bin/naff-ccd",
+        "args": [],
+        "node": "REPLACE",
+        "cpus": "REPLACE",
+        "policy": "fifo",
+        "priority": 1,
+        "environment": {
+          "NAFF_CCD_PREFIX": "REPLACE_WITH_QUALIFIED_FLEET_PREFIX",
+          "REPLACE_WITH_PERIOD_VARIABLE": "REPLACE_WITH_HOST_PERIOD"
+        },
+        "files": [],
+        "ready_keys": [
+          "sr/diagnostics/naff/g73/REPLACE_WITH_PUBLISHED_KEY"
+        ],
+        "ready_log": [
+          "spectrum ring labelled",
+          "REPLACE_WITH_GROUP_INITIALIZATION_EVIDENCE"
+        ],
+        "timeout": 90,
+        "shm": "/mnt/hugepages2m/naff",
+        "group": 73
+      },
+      {
+        "executable": "/runtime/bin/naff-ccd",
+        "args": [],
+        "node": "REPLACE",
+        "cpus": "REPLACE",
+        "policy": "fifo",
+        "priority": 1,
+        "environment": {
+          "NAFF_CCD_PREFIX": "REPLACE_WITH_QUALIFIED_FLEET_PREFIX",
+          "REPLACE_WITH_PERIOD_VARIABLE": "REPLACE_WITH_HOST_PERIOD"
+        },
+        "files": [],
+        "ready_keys": [
+          "sr/diagnostics/naff/g81/REPLACE_WITH_PUBLISHED_KEY"
+        ],
+        "ready_log": [
+          "spectrum ring labelled",
+          "REPLACE_WITH_GROUP_INITIALIZATION_EVIDENCE"
+        ],
+        "timeout": 90,
+        "shm": "/mnt/hugepages2m/naff",
+        "group": 81
+      },
+      {
+        "executable": "/runtime/bin/naff-ccd",
+        "args": [],
+        "node": "REPLACE",
+        "cpus": "REPLACE",
+        "policy": "fifo",
+        "priority": 1,
+        "environment": {
+          "NAFF_CCD_PREFIX": "REPLACE_WITH_QUALIFIED_FLEET_PREFIX",
+          "REPLACE_WITH_PERIOD_VARIABLE": "REPLACE_WITH_HOST_PERIOD"
+        },
+        "files": [],
+        "ready_keys": [
+          "sr/diagnostics/naff/g89/REPLACE_WITH_PUBLISHED_KEY"
+        ],
+        "ready_log": [
+          "spectrum ring labelled",
+          "REPLACE_WITH_GROUP_INITIALIZATION_EVIDENCE"
+        ],
+        "timeout": 90,
+        "shm": "/mnt/hugepages2m/naff",
+        "group": 89
+      }
+    ]
   },
   "e810": {
     "bdfs": [
@@ -423,5 +703,96 @@
       "sr/dpdkmaster/REPLACE_fast-01_4/REPLACE_WITH_KNOB": "REPLACE",
       "sr/dpdkmaster/REPLACE_fast-01_5/REPLACE_WITH_KNOB": "REPLACE"
     }
+  },
+  "readiness": {
+    "live": [
+      "naff-knobs",
+      "real-beam",
+      "compaction",
+      "fair-server",
+      "tick-revalidate"
+    ],
+    "not_applicable": {},
+    "naff_base": "sr/diagnostics/naff",
+    "sample_interval": 2,
+    "timeout": 30,
+    "labels": {
+      "naff1": [
+        "REPLACE_SPECTRUM_LABEL_g1",
+        "REPLACE_TUNE_LABEL_g1"
+      ],
+      "naff9": [
+        "REPLACE_SPECTRUM_LABEL_g9",
+        "REPLACE_TUNE_LABEL_g9"
+      ],
+      "naff17": [
+        "REPLACE_SPECTRUM_LABEL_g17",
+        "REPLACE_TUNE_LABEL_g17"
+      ],
+      "naff25": [
+        "REPLACE_SPECTRUM_LABEL_g25",
+        "REPLACE_TUNE_LABEL_g25"
+      ],
+      "naff33": [
+        "REPLACE_SPECTRUM_LABEL_g33",
+        "REPLACE_TUNE_LABEL_g33"
+      ],
+      "naff41": [
+        "REPLACE_SPECTRUM_LABEL_g41",
+        "REPLACE_TUNE_LABEL_g41"
+      ],
+      "naff49": [
+        "REPLACE_SPECTRUM_LABEL_g49",
+        "REPLACE_TUNE_LABEL_g49"
+      ],
+      "naff57": [
+        "REPLACE_SPECTRUM_LABEL_g57",
+        "REPLACE_TUNE_LABEL_g57"
+      ],
+      "naff65": [
+        "REPLACE_SPECTRUM_LABEL_g65",
+        "REPLACE_TUNE_LABEL_g65"
+      ],
+      "naff73": [
+        "REPLACE_SPECTRUM_LABEL_g73",
+        "REPLACE_TUNE_LABEL_g73"
+      ],
+      "naff81": [
+        "REPLACE_SPECTRUM_LABEL_g81",
+        "REPLACE_TUNE_LABEL_g81"
+      ],
+      "naff89": [
+        "REPLACE_SPECTRUM_LABEL_g89",
+        "REPLACE_TUNE_LABEL_g89"
+      ]
+    }
+  },
+  "naff-knobs": {
+    "bases": [
+      "sr/diagnostics/naff"
+    ],
+    "groups": [
+      1,
+      9,
+      17,
+      25,
+      33,
+      41,
+      49,
+      57,
+      65,
+      73,
+      81,
+      89
+    ],
+    "pipeline_stages": 31,
+    "sideband_floor": "REPLACE",
+    "waterfall_mask": "REPLACE"
+  },
+  "fair-server": {
+    "runtime_paths": [
+      "/sys/kernel/debug/sched/fair_server/cpuREPLACE/runtime"
+    ],
+    "runtime_ns": "REPLACE_POSITIVE"
   }
 }

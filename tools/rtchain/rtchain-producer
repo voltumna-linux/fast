@@ -16,13 +16,16 @@ def main():
     commands.add_parser('live')
     for action in ('launch', 'wait'):
         command = commands.add_parser(action)
-        command.add_argument('name', choices=producers.NAMES)
+        command.add_argument('name', help='tsc, master0..5, ebpm or naffGROUP')
         if action == 'wait':
             command.add_argument('--pid', type=int, required=True)
     args = parser.parse_args()
     try:
         config, _ = load(args.config)
         producers.validate(config)
+        if 'naffs' in config['producers']:
+            import rtchain_readiness
+            rtchain_readiness.validate(config)
         if args.command in ('preflight', 'live'):
             getattr(producers, args.command)(config)
         elif args.command == 'launch':

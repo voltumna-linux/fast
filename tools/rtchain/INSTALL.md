@@ -4,8 +4,8 @@ Il pacchetto `fast-rtchain` è incluso nelle immagini runtime e sviluppo FAST.
 Installa gli strumenti Python, le unit statiche e la barriera target, il
 generatore delle dipendenze dell'host e journald volatile con limite 128 MiB.
 Non abilita il bring-up storico. TSC, sei master ed ebpm sono integrati dal ticket 03, come descritto in
-[PRODUCERS.md](PRODUCERS.md); readiness finale e Starter restano nei ticket
-successivi. La sola unit prepare non avvia la catena.
+[PRODUCERS.md](PRODUCERS.md). I dodici naff e la readiness finale del ticket
+04 sono descritti in [READINESS.md](READINESS.md); Starter resta nei ticket successivi. La sola unit prepare non avvia la catena.
 
 ## Configurazione dell'host
 
@@ -90,8 +90,8 @@ operazione prepare occorre selezionarla oppure scrivere una motivazione in
   assegnazioni ricavate dai futuri profili CPU, senza interrogare PID Tango.
 
 E810 TPH/tuning dopo inizializzazione EAL sono integrati nella fase produttori
-del ticket 03. Compaction, fair server e tick-revalidate restano dopo i naff
-nel ticket 04. Il runtime
+del ticket 03. Compaction, fair server e tick-revalidate sono eseguiti dopo i naff
+dalla fase finale descritta in [READINESS.md](READINESS.md). Il runtime
 fair server deve restare positivo: zero, stop dei servizi e watchdog storici
 non sono varianti supportate da questa preparazione. Non si attivano watchdog
 RAM o processi residenti senza un contratto di supervisione. Il binding VFIO
@@ -159,6 +159,6 @@ socket dell'ambiente. Le verifiche dell'immagine e del boot restano da eseguire:
    kernel. Dopo EAL verificare separatamente VFIO/E810, tuning live, fair server
    e tick. Annotare eccezioni gestite dal kernel e misurare jitter sull'hardware.
 
-La readiness realtime e la prova systemd → Starter → server Tango rimangono
-nei ticket successivi. Il successo di questi test non certifica prestazioni
+La readiness realtime è descritta in [READINESS.md](READINESS.md); la prova
+systemd → Starter → server Tango richiede ancora i ticket successivi. Il successo di questi test non certifica prestazioni
 realtime, allocazioni fisiche NUMA o disponibilità completa del banco.
