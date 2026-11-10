@@ -8,6 +8,8 @@ ai ticket 02–04. Il pacchetto e la preparazione statica sono descritti in
 [PRODUCERS.md](PRODUCERS.md), i dodici naff e la readiness finale in
 [READINESS.md](READINESS.md). La configurazione funzionale successiva a
 Starter è descritta in [BENCH.md](BENCH.md).
+Il collaudo integrato per ciascun host e le evidenze richieste sono in
+[COLLAUDO.md](COLLAUDO.md).
 Non avvia server Tango, non ferma processi e non rimuove memoria condivisa.
 Il collegamento della readiness all'avvio nativo di Starter e il test
 systemd → Starter → server sono descritti in [STARTUP.md](STARTUP.md).
