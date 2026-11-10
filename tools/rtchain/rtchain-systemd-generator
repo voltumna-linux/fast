@@ -7,6 +7,7 @@ import sys
 from rtchain_config import load
 import rtchain_producers
 import rtchain_readiness
+import rtchain_bench
 
 
 def write(root, name, content):
@@ -49,6 +50,18 @@ def main():
             write(args.normal, 'rtchain-producer-preflight.service.d/60-producer.conf',
                   '[Service]\nExecStartPre=/bin/false\n')
             return 1
+    if config.get('bench', {}).get('enabled') is True:
+        # Bench errors must never invalidate the earlier realtime gate.
+        write(args.normal, 'starter.service.d/80-bench.conf',
+              '[Unit]\nWants=rtchain-bench.service\n')
+        try:
+            rtchain_bench.validate(config)
+            write(args.normal, 'rtchain-bench.service.d/80-bench.conf',
+                  '[Unit]\nRequiresMountsFor=' + ' '.join(mounts) + '\n')
+        except Exception as error:
+            print(f'rtchain-systemd-generator: bench: {error}', file=sys.stderr)
+            write(args.normal, 'rtchain-bench.service.d/80-bench.conf',
+                  '[Service]\nExecStartPre=/bin/false\n')
     return 0
 
 

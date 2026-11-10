@@ -1,0 +1,25 @@
+#!/usr/bin/env python3
+"""Configure the bench only after Starter has launched its Tango servers."""
+import argparse
+from pathlib import Path
+import sys
+
+from rtchain_config import load
+from rtchain_bench import configure
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--config', type=Path)
+    args = parser.parse_args()
+    try:
+        config, _ = load(args.config)
+        configure(config)
+    except Exception as error:
+        print(f'rtchain-bench: bench not ready: {error}', file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

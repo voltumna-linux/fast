@@ -21,7 +21,7 @@ do_install() {
     install -d ${D}${libexecdir}/rtchain ${D}${systemd_unitdir}/system \
         ${D}${systemd_unitdir}/system-generators ${D}${sysconfdir}/fast/hosts \
         ${D}${sysconfdir}/systemd/journald.conf.d ${D}${datadir}/fast/rtchain/examples
-    for tool in rtchain-ops rtchain-prepare rtchain-producer rtchain-ready rtchain-systemd-generator tango-profile; do
+    for tool in rtchain-ops rtchain-prepare rtchain-producer rtchain-ready rtchain-bench rtchain-systemd-generator tango-profile; do
         install -m 0755 ${S}/rtchain/$tool ${D}${libexecdir}/rtchain/
     done
     install -m 0644 ${S}/rtchain/rtchain_*.py ${D}${libexecdir}/rtchain/
@@ -49,6 +49,7 @@ do_install() {
     install -m 0644 ${S}/rtchain/PRODUCERS.md ${D}${datadir}/fast/rtchain/
     install -m 0644 ${S}/rtchain/README.md ${D}${datadir}/fast/rtchain/
     install -m 0644 ${S}/rtchain/TANGO.md ${D}${datadir}/fast/rtchain/
+    install -m 0644 ${S}/rtchain/BENCH.md ${D}${datadir}/fast/rtchain/
     install -m 0644 ${S}/rtchain/STARTUP.md ${D}${datadir}/fast/rtchain/
     install -d ${D}${libexecdir}/rtchain-tests
     install -m 0755 ${S}/rtchain/tests/systemd_integration.py ${D}${libexecdir}/rtchain-tests/

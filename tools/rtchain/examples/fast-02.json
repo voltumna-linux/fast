@@ -841,5 +841,28 @@
         "priority": 0
       }
     ]
+  },
+  "bench": {
+    "enabled": false,
+    "timeout": 120,
+    "poll_interval": 2,
+    "devices": [
+      {
+        "name": "sr/tcbuf/REPLACE_fast-02",
+        "attributes": []
+      }
+    ],
+    "keys": [
+      "REPLACE_WITH_HOST_PUBLISHED_TCBUF_SOURCE_FIELD"
+    ],
+    "operations": [
+      "smart-rescan"
+    ]
+  },
+  "smart-rescan": {
+    "tango_host": "REPLACE:0",
+    "devices": [
+      "sr/tcbuf/REPLACE_fast-02"
+    ]
   }
 }

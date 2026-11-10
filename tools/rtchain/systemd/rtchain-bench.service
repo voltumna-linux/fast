@@ -1,0 +1,14 @@
+[Unit]
+Description=Configure FAST bench after Tango servers become functional
+Requires=starter.service
+After=starter.service
+Conflicts=rtchain.service
+
+[Service]
+Type=oneshot
+Slice=tango.slice
+User=controls
+ExecStart=/usr/libexec/rtchain/rtchain-bench
+RemainAfterExit=yes
+TimeoutStartSec=900
+LimitMEMLOCK=infinity
