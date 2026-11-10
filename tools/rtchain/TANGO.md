@@ -14,9 +14,9 @@ e gli errori del launcher restano nei log Starter/DevReadLog.
 
 `fast-rtchain` installa il drop-in di `starter.service` e `tango-profile`.
 L'utente/gruppo rimane `controls`, come configurato da meta-elettra.
-La preparazione della macchina precede Starter. La dipendenza dalla readiness
-realtime appartiene al ticket 07: questo cambiamento da solo non certifica
-l'ordine di avvio completo.
+Starter richiede anche il successo della readiness realtime ed è ordinato
+dopo di essa. Il contratto di avvio, la dismissione del servizio monolitico
+e il test systemd → Starter → server di prova sono in [STARTUP.md](STARTUP.md).
 
 ## Gerarchia e permessi
 
