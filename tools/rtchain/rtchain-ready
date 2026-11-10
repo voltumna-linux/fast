@@ -1,0 +1,29 @@
+#!/usr/bin/env python3
+"""Complete producer live settings or certify readiness without Tango."""
+import argparse
+from pathlib import Path
+import sys
+
+from rtchain_config import load
+import rtchain_producers
+import rtchain_readiness
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--config', type=Path)
+    parser.add_argument('command', choices=('live', 'check'))
+    args = parser.parse_args()
+    try:
+        config, _ = load(args.config)
+        rtchain_producers.validate(config)
+        rtchain_readiness.validate(config)
+        getattr(rtchain_readiness, args.command)(config)
+    except Exception as error:
+        print(f'rtchain-ready: {args.command}: {error}', file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

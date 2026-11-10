@@ -16,7 +16,8 @@ LIVE = ('e810', 'master-knobs', 'tx-rate')
 
 def entries(config):
     cfg = config['producers']
-    return dict(zip(NAMES, [cfg['tsc'], *cfg['masters'], cfg['ebpm']]))
+    return {**dict(zip(NAMES, [cfg['tsc'], *cfg['masters'], cfg['ebpm']])),
+            **{f"naff{n['group']}": n for n in cfg.get('naffs', [])}}
 
 
 def validate(config):
@@ -134,6 +135,8 @@ def environment(config, name):
                    'DPDK_ALLOW': item['bdf'] + ',' + item.get('devargs', 'safe-mode-support=1'),
                    'DPDK_MASTER_CTRL_CORES': item['control_cpus'],
                    'DPDK_MASTER_CRUDA_CONF': str(log_path(config, name).with_suffix('.conf'))}
+    elif name.startswith('naff'):
+        managed = {'NAFF_CCD_GROUP': str(item['group'])}
     elif name == 'ebpm':
         managed = {'DPDK_EBPM_MASTERS': ','.join(m['shm'] for m in cfg['masters']),
                    'DPDK_EBPM_SPLIT_PORTS': '0,1,2,3,4,5', 'DPDK_SLAVE_SHM_BASE': item['shm'],
@@ -175,6 +178,8 @@ def catalog_rows(path):
 
 def preflight(config):
     cfg = config['producers']
+    if 'naffs' in cfg and not os.access(config['tools']['rtchain_probe'], os.X_OK):
+        raise ValueError('missing functional probe executable')
     for name, item in entries(config).items():
         if not os.access(item['executable'], os.X_OK):
             raise ValueError(f'{name}: missing executable {item["executable"]}')
@@ -226,7 +231,11 @@ def preflight(config):
 
 def launch(config, name):
     item = entries(config)[name]
-    if Path(item['shm']).exists() or (name.startswith('master') and Path(item['eal']).exists()):
+    if name.startswith('naff'):
+        creator = item is config['producers']['naffs'][0]
+        if Path(item['shm']).exists() == creator:
+            raise ValueError(f'{name}: expected ' + ('new creator resource' if creator else 'existing creator resource'))
+    elif Path(item['shm']).exists() or (name.startswith('master') and Path(item['eal']).exists()):
         raise ValueError(f'{name}: refusing existing resources; clean boot required')
     # Explicit environment, no inherited DPDK variables or historical defaults.
     env = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', **environment(config, name)}
@@ -307,8 +316,16 @@ def wait(config, name, pid):
         time.sleep(0.05)
 
 
+def unit_name(name):
+    if name.startswith('master'):
+        return f'rtchain-master@{name[6:]}.service'
+    if name.startswith('naff'):
+        return f'rtchain-naff@{name[4:]}.service'
+    return f'rtchain-{name}.service'
+
+
 def main_pid(config, name):
-    unit = f'rtchain-master@{name[-1]}.service' if name.startswith('master') else f'rtchain-{name}.service'
+    unit = unit_name(name)
     pid = int(command(config, 'systemctl', 'show', '-p', 'MainPID', '--value', unit))
     if pid <= 0:
         raise ValueError(f'{unit}: no live MainPID')
@@ -371,7 +388,7 @@ def generate(config, root):
     """Host drop-ins only; all services themselves are installed statically."""
     mounts = validate(config)
     for name, item in entries(config).items():
-        unit = f'rtchain-master@{name[-1]}' if name.startswith('master') else f'rtchain-{name}'
+        unit = unit_name(name).removesuffix('.service')
         target = root / f'{unit}.service.d/60-producer.conf'
         target.parent.mkdir(parents=True, exist_ok=True)
         content = '[Unit]\nRequiresMountsFor=' + ' '.join(mounts) + '\n'

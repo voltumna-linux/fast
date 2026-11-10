@@ -16,7 +16,8 @@ lascia fallita la fase. Tutti i servizi dei produttori usano `rtchain.slice` e
 unit ordinarie installate nell'immagine, senza `systemd-run`, launcher storici,
 bring-up completo o teardown. Nessun produttore ha restart automatico.
 
-I dodici naff e la readiness funzionale finale appartengono al ticket 04;
+I dodici naff e la readiness funzionale finale sono integrati dal ticket 04
+in [READINESS.md](READINESS.md);
 questo target non autorizza ancora Starter e non certifica il banco.
 Stop, pulizia delle risorse e riavvio durante il servizio restano esclusi.
 Dopo un fallimento correggere la causa e ripartire da un boot pulito: non
@@ -142,8 +143,8 @@ Per ogni operazione esclusa serve una motivazione non vuota in
   `RateAppliedPct` uguale su tutti, entro il timeout ebpm. Un valore scritto
   senza riscontro non conclude la fase.
 
-Compaction, naff-knobs, fair server e rivalutazione tick restano nella fase
-successiva del ticket 04, dopo i dodici naff. Non invocare `phase live` del
+Compaction, naff-knobs, fair server e rivalutazione tick sono nella fase
+finale del ticket 04 descritta in [READINESS.md](READINESS.md), dopo i dodici naff. Non invocare `phase live` del
 vecchio estrattore al posto della fase produttori: comprende operazioni i
 cui prerequisiti non sono ancora presenti.
 
@@ -179,4 +180,5 @@ messaggi di inizializzazione, FILL/DRAIN lato master e impostazioni E810 lette
 indietro. Verificare MainPID dopo gli exec e le variabili nei sei processi.
 La presenza di file in una simulazione non dimostra memoria fisica NUMA,
 inizializzazione reale delle code o prestazioni realtime. La prova funzionale
-del flusso e l'autorizzazione di Starter restano nel ticket 04 e successivi.
+del flusso è integrata nel ticket 04 ([READINESS.md](READINESS.md)); la
+dipendenza di Starter rimane nel ticket 07.
