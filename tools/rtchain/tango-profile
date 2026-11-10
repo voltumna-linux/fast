@@ -1,0 +1,39 @@
+#!/usr/bin/env python3
+"""FAST native Starter cgroups and repeatable device-property provisioning."""
+import argparse
+import json
+import os
+from pathlib import Path
+import sys
+
+from rtchain_config import load
+from rtchain_tango import configure_db, provision
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--config', type=Path)
+    sub = parser.add_subparsers(dest='action', required=True)
+    db = sub.add_parser('configure-db')
+    db.add_argument('--apply', action='store_true', help='write and read back device properties')
+    launch = sub.add_parser('launch')
+    launch.add_argument('command', nargs=argparse.REMAINDER)
+    args = parser.parse_args()
+    try:
+        config, _ = load(args.config)
+        if args.action == 'configure-db':
+            print(json.dumps(configure_db(config, args.apply), indent=2))
+        else:
+            command = args.command[1:] if args.command[:1] == ['--'] else args.command
+            if not command or not Path(command[0]).is_absolute():
+                raise ValueError('launch requires an absolute executable after --')
+            provision(config)
+            os.execv(command[0], command)
+        return 0
+    except Exception as error:
+        print(f'tango-profile: {error}', file=sys.stderr)
+        return 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())

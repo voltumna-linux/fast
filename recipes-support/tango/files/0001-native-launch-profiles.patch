@@ -1,0 +1,1272 @@
+From: FAST maintainers
+Subject: [PATCH] Native launch profiles and image integration probe
+
+Includes workspace starter commit 034326ca9431210c672810185d31181c1c214b35 and the shared-memory probe
+extension for FAST image qualification. Base: 11145e1d0717971b4d37c74055b305679f2c853c.
+
+Upstream-Status: Pending [FAST native launch profiles]
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index b46d391..5182c18 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -33,20 +33,37 @@ set(HEADER CheckProcessUtil.h
+            Logging.h
+            PingThread.h
+            Starter.h
+            StarterClass.h
+            StarterService.h
+            StarterUtil.h)
+ 
+ add_executable(Starter ${SOURCES} ${HEADER})
+ target_link_libraries(Starter PRIVATE Tango::Tango)
+ 
++if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
++    target_sources(Starter PRIVATE LinuxNativeLaunch.cpp LinuxNativeLaunch.h)
++    include(CTest)
++    if(BUILD_TESTING)
++        find_package(Threads REQUIRED)
++        add_executable(native_launch_test tests/native_launch.cpp LinuxNativeLaunch.cpp)
++        target_include_directories(native_launch_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
++        target_link_libraries(native_launch_test PRIVATE Threads::Threads)
++        target_compile_options(native_launch_test PRIVATE -Wall -Wextra -Werror -pedantic)
++        add_test(NAME native_launch COMMAND native_launch_test)
++        set_tests_properties(native_launch PROPERTIES TIMEOUT 20)
++        add_executable(NativeProfileProbe tests/NativeProfileProbe.cpp)
++        target_link_libraries(NativeProfileProbe PRIVATE Tango::Tango Threads::Threads)
++        target_compile_options(NativeProfileProbe PRIVATE -Wall -Wextra -Werror -pedantic)
++    endif()
++endif()
++
+ if (WIN32 AND (Tango_IS_STATIC OR Tango_FORCE_STATIC))
+     set_target_properties(${PROJECT_NAME} PROPERTIES
+         MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
+     )
+ endif()
+ 
+ if (WIN32)
+     # Starter requires WIN32 UNICODE string support see
+     # https://learn.microsoft.com/en-us/cpp/text/unicode-programming-summary?view=msvc-170
+     # and https://learn.microsoft.com/en-us/windows/win32/learnwin32/working-with-strings
+diff --git a/LinuxNativeLaunch.cpp b/LinuxNativeLaunch.cpp
+new file mode 100644
+index 0000000..31179aa
+--- /dev/null
++++ b/LinuxNativeLaunch.cpp
+@@ -0,0 +1,263 @@
++#include "LinuxNativeLaunch.h"
++
++#include <cerrno>
++#include <climits>
++#include <csignal>
++#include <cstring>
++#include <fcntl.h>
++#include <linux/magic.h>
++#include <linux/mempolicy.h>
++#include <map>
++#include <sched.h>
++#include <stdexcept>
++#include <sys/statfs.h>
++#include <sys/syscall.h>
++#include <sys/wait.h>
++#include <unistd.h>
++
++extern char **environ;
++
++namespace Starter_ns {
++namespace {
++class Fd {
++public:
++    explicit Fd(int value = -1) : value(value) {
++        if (value >= 0 && value <= STDERR_FILENO) {
++            this->value = fcntl(value, F_DUPFD_CLOEXEC, 3);
++            int error = errno;
++            close(value);
++            errno = error;
++        }
++    }
++    ~Fd() { if (value >= 0) close(value); }
++    Fd(const Fd &) = delete;
++    Fd &operator=(const Fd &) = delete;
++    int get() const { return value; }
++    void reset() { if (value >= 0) close(value); value = -1; }
++private:
++    int value;
++};
++
++[[noreturn]] void system_error(const std::string &operation, int error = errno) {
++    throw std::runtime_error(operation + ": " + std::strerror(error));
++}
++
++unsigned number(const std::string &value, unsigned maximum) {
++    if (value.empty() || value.find_first_not_of("0123456789") != std::string::npos)
++        throw std::runtime_error("expected an unsigned decimal integer: " + value);
++    unsigned result = 0;
++    for (char digit : value) {
++        if (result > maximum / 10 ||
++            (result == maximum / 10 && unsigned(digit - '0') > maximum % 10))
++            throw std::runtime_error("integer out of range: " + value);
++        result = result * 10 + unsigned(digit - '0');
++    }
++    return result;
++}
++
++std::vector<unsigned> index_list(const std::string &value, unsigned maximum) {
++    std::vector<unsigned> result;
++    std::size_t begin = 0;
++    do {
++        auto end = value.find(',', begin);
++        auto part = value.substr(begin, end - begin);
++        auto dash = part.find('-');
++        unsigned first = number(part.substr(0, dash), maximum);
++        unsigned last = dash == std::string::npos ? first : number(part.substr(dash + 1), maximum);
++        if (first > last)
++            throw std::runtime_error("descending index range: " + part);
++        for (unsigned index = first; index <= last; ++index)
++            result.push_back(index);
++        if (end == std::string::npos) break;
++        begin = end + 1;
++    } while (true);
++    return result;
++}
++
++std::string read_at(int directory, const char *name) {
++    Fd fd(openat(directory, name, O_RDONLY | O_CLOEXEC));
++    if (fd.get() < 0) system_error(std::string("open cgroup ") + name);
++    std::string value;
++    char buffer[4096];
++    ssize_t count;
++    while ((count = read(fd.get(), buffer, sizeof(buffer))) != 0) {
++        if (count < 0) {
++            if (errno == EINTR) continue;
++            system_error(std::string("read cgroup ") + name);
++        }
++        value.append(buffer, static_cast<std::size_t>(count));
++        if (value.size() > 65536) throw std::runtime_error("cgroup value too long");
++    }
++    while (!value.empty() && (value.back() == '\n' || value.back() == '\r')) value.pop_back();
++    return value;
++}
++
++struct Profile {
++    cpu_set_t cpus{};
++    std::vector<unsigned long> nodes;
++    unsigned maxnode = 0;
++    int scheduler = SCHED_OTHER;
++    sched_param scheduling{};
++    std::string cgroup;
++};
++
++Profile parse(const std::vector<std::string> &lines) {
++    std::map<std::string, std::string> fields;
++    for (const auto &line : lines) {
++        auto equals = line.find('=');
++        if (equals == std::string::npos || !fields.emplace(line.substr(0, equals), line.substr(equals + 1)).second)
++            throw std::runtime_error("malformed or duplicate NativeLaunchProfile field: " + line);
++    }
++    const char *keys[] = {"version", "cgroup", "cpus", "numa_node", "scheduler", "priority"};
++    for (auto key : keys)
++        if (!fields.count(key)) throw std::runtime_error(std::string("missing NativeLaunchProfile field: ") + key);
++    if (fields.size() != 6 || fields.at("version") != "1")
++        throw std::runtime_error("unknown NativeLaunchProfile field or version");
++    Profile profile;
++    profile.cgroup = fields.at("cgroup");
++    if (profile.cgroup.empty() || profile.cgroup.front() != '/' || profile.cgroup.find('\0') != std::string::npos)
++        throw std::runtime_error("cgroup must be an absolute directory path");
++    CPU_ZERO(&profile.cpus);
++    for (auto cpu : index_list(fields.at("cpus"), CPU_SETSIZE - 1)) CPU_SET(cpu, &profile.cpus);
++    unsigned node = number(fields.at("numa_node"), 4095);
++    profile.maxnode = node + 1;
++    const unsigned bits = sizeof(unsigned long) * CHAR_BIT;
++    profile.nodes.resize(node / bits + 1, 0);
++    profile.nodes[node / bits] |= 1UL << (node % bits);
++    const auto &policy = fields.at("scheduler");
++    if (policy == "other") profile.scheduler = SCHED_OTHER;
++    else if (policy == "fifo") profile.scheduler = SCHED_FIFO;
++    else if (policy == "rr") profile.scheduler = SCHED_RR;
++    else throw std::runtime_error("scheduler must be other, fifo or rr");
++    profile.scheduling.sched_priority = static_cast<int>(number(fields.at("priority"), 99));
++    int priority = profile.scheduling.sched_priority;
++    if (priority < sched_get_priority_min(profile.scheduler) || priority > sched_get_priority_max(profile.scheduler))
++        throw std::runtime_error("priority is outside the scheduler's range");
++    return profile;
++}
++
++// Fixed-size message: the child uses only syscalls and stack data after fork.
++enum Stage { Detach, Fork, Redirect, Cgroup, Affinity, AffinityCheck, Numa, Scheduler, Exec };
++const char *stage_names[] = {"setsid", "second fork", "redirect logs", "join cgroup",
++    "set CPU affinity", "verify CPU affinity", "bind private NUMA allocations", "set scheduler", "exec"};
++struct Failure { int stage; int error; };
++
++[[noreturn]] void child_error(int pipe_fd, Stage stage, int error) {
++    Failure failure{stage, error};
++    ssize_t written;
++    do { written = write(pipe_fd, &failure, sizeof(failure)); } while (written < 0 && errno == EINTR);
++    _exit(127);
++}
++}
++
++void linux_native_launch(const char *executable, const char *instance,
++                         const char *log_file, const std::vector<std::string> *lines) {
++    Profile profile;
++    if (lines) profile = parse(*lines);
++    Fd directory(lines ? open(profile.cgroup.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC) : -1);
++    if (lines) {
++        if (directory.get() < 0) system_error("open cgroup " + profile.cgroup);
++        struct statfs fs{};
++        if (fstatfs(directory.get(), &fs) < 0) system_error("stat cgroup");
++        if (fs.f_type != CGROUP2_SUPER_MAGIC) throw std::runtime_error("profile requires a cgroup v2 directory");
++        if (read_at(directory.get(), "cgroup.type") != "domain")
++            throw std::runtime_error("profile requires a domain cgroup");
++        cpu_set_t effective;
++        CPU_ZERO(&effective);
++        for (auto cpu : index_list(read_at(directory.get(), "cpuset.cpus.effective"), CPU_SETSIZE - 1)) CPU_SET(cpu, &effective);
++        if (!CPU_EQUAL(&effective, &profile.cpus))
++            throw std::runtime_error("cpuset.cpus.effective must equal profile cpus");
++        bool allowed = false;
++        for (auto node : index_list(read_at(directory.get(), "cpuset.mems.effective"), 4095))
++            if (node + 1 == profile.maxnode) allowed = true;
++        if (!allowed) throw std::runtime_error("private NUMA node is outside cpuset.mems.effective");
++    }
++    Fd membership(lines ? openat(directory.get(), "cgroup.procs", O_WRONLY | O_CLOEXEC) : -1);
++    if (lines && membership.get() < 0) system_error("open cgroup.procs " + profile.cgroup);
++    Fd output(open("/dev/null", O_RDWR | O_CLOEXEC));
++    if (output.get() < 0) system_error("open /dev/null");
++    Fd log(open(log_file, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0664));
++    if (log.get() < 0) system_error("open native launch log " + std::string(log_file));
++    // Starter supplies a checked pathname from StartDsPath. Prepare both the
++    // direct-exec arguments and the historic execvp shell fallback here.
++    char *argv[] = {const_cast<char *>(executable), const_cast<char *>(instance), nullptr};
++    std::vector<std::string> environment_values;
++    for (char **entry = environ; *entry; ++entry) environment_values.emplace_back(*entry);
++    std::vector<char *> environment;
++    for (auto &entry : environment_values) environment.push_back(&entry[0]);
++    environment.push_back(nullptr);
++    char **envp = environment.data();
++    char *shell_argv[] = {const_cast<char *>("/bin/sh"), const_cast<char *>(executable),
++                          const_cast<char *>(instance), nullptr};
++    int pipes[2];
++    if (pipe2(pipes, O_CLOEXEC) < 0) system_error("create exec error pipe");
++    Fd reader(pipes[0]);
++    Fd writer(pipes[1]);
++    if (reader.get() < 0 || writer.get() < 0) system_error("prepare exec error pipe");
++    // Cache child data pointers before fork (no C++ library calls in the child).
++    int cgroup_fd = membership.get(), out_fd = output.get(), log_fd = log.get();
++    int read_fd = reader.get(), write_fd = writer.get();
++    const unsigned long *nodes = profile.nodes.data();
++    pid_t child = fork();
++    if (child < 0) system_error("fork");
++    if (child == 0) {
++        close(read_fd);
++        if (setsid() < 0) child_error(write_fd, Detach, errno);
++        // Do not run application pthread_atfork handlers in the already forked
++        // child of this multithreaded server.
++#ifdef SYS_fork
++        pid_t grandchild = static_cast<pid_t>(syscall(SYS_fork));
++#else
++        pid_t grandchild = static_cast<pid_t>(syscall(SYS_clone, SIGCHLD, nullptr, nullptr, nullptr, 0));
++#endif
++        if (grandchild < 0) child_error(write_fd, Fork, errno);
++        if (grandchild > 0) _exit(0);
++        if (dup2(out_fd, STDOUT_FILENO) < 0 || dup2(log_fd, STDERR_FILENO) < 0)
++            child_error(write_fd, Redirect, errno);
++        if (lines) {
++            ssize_t count;
++            do { count = write(cgroup_fd, "0", 1); } while (count < 0 && errno == EINTR);
++            if (count != 1) child_error(write_fd, Cgroup, count < 0 ? errno : EIO);
++            if (sched_setaffinity(0, sizeof(profile.cpus), &profile.cpus) < 0)
++                child_error(write_fd, Affinity, errno);
++            cpu_set_t actual;
++            if (sched_getaffinity(0, sizeof(actual), &actual) < 0)
++                child_error(write_fd, AffinityCheck, errno);
++            // Compare inline, without invoking libc's CPU_EQUAL helper.
++            const auto *wanted = reinterpret_cast<const unsigned char *>(&profile.cpus);
++            const auto *got = reinterpret_cast<const unsigned char *>(&actual);
++            for (unsigned i = 0; i < sizeof(actual); ++i)
++                if (wanted[i] != got[i]) child_error(write_fd, AffinityCheck, EINVAL);
++            if (syscall(SYS_set_mempolicy, MPOL_BIND, nodes, profile.maxnode) < 0)
++                child_error(write_fd, Numa, errno);
++            if (sched_setscheduler(0, profile.scheduler, &profile.scheduling) < 0)
++                child_error(write_fd, Scheduler, errno);
++        }
++        execve(executable, argv, envp);
++        // Preserve execvp's historic handling of executable text scripts.
++        if (errno == ENOEXEC) execve("/bin/sh", shell_argv, envp);
++        child_error(write_fd, Exec, errno);
++    }
++    // This descriptor must close before reading, to observe EOF at exec.
++    writer.reset();
++    int status = 0;
++    while (waitpid(child, &status, 0) < 0) {
++        if (errno == EINTR) continue;
++        system_error("waitpid native launcher");
++    }
++    Failure failure{};
++    std::size_t received = 0;
++    while (received < sizeof(failure)) {
++        ssize_t count = read(reader.get(), reinterpret_cast<char *>(&failure) + received, sizeof(failure) - received);
++        if (count < 0) {
++            if (errno == EINTR) continue;
++            system_error("read native exec result");
++        }
++        if (count == 0) break;
++        received += static_cast<std::size_t>(count);
++    }
++    if (received == sizeof(failure)) system_error(stage_names[failure.stage], failure.error);
++    if (received != 0 || !WIFEXITED(status) || WEXITSTATUS(status) != 0)
++        throw std::runtime_error("native launcher terminated before exec");
++}
++}
+diff --git a/LinuxNativeLaunch.h b/LinuxNativeLaunch.h
+new file mode 100644
+index 0000000..d31b5ab
+--- /dev/null
++++ b/LinuxNativeLaunch.h
+@@ -0,0 +1,13 @@
++#pragma once
++
++#include <string>
++#include <vector>
++
++namespace Starter_ns {
++// Linux only. A null profile preserves the native inherited process policies.
++// All preparation and error reporting happen in the calling thread. Throws on
++// preparation/fork/policy/exec failure; returns after the real executable execs.
++void linux_native_launch(const char *executable, const char *instance,
++                         const char *log_file,
++                         const std::vector<std::string> *profile);
++}
+diff --git a/README.md b/README.md
+index 4328c2d..a56b67b 100644
+--- a/README.md
++++ b/README.md
+@@ -16,20 +16,24 @@ This repository uses git submodules.
+ - Ensure that updates to git submodules are pulled:
+ 
+ `git pull --recurse-submodules`
+ 
+ ## Documentation 
+ 
+ See [Documentation](http://www.tango-controls.org/developers/dsc/ds/423/) for more details.
+ 
+ See also [Astor](https://tango-controls.readthedocs.io/en/latest/tools-and-extensions/built-in/astor/index.html?highlight=Astor)
+ 
++Linux native launches support a per-server
++[`NativeLaunchProfile`](docs/native-launch-profile.md) device property for cgroup,
++CPU affinity, private NUMA allocation and scheduling before the server execs.
++
+ ## Building and Installation
+ 
+ See the [INSTALL.md](INSTALL.md) file for detailed instructions on how to build and install the Starter.
+ 
+ ### Dependencies
+ 
+ The project has the following dependencies.
+ 
+ #### Project Dependencies
+ 
+diff --git a/StartProcessThread.cpp b/StartProcessThread.cpp
+index 207b684..c341fc2 100644
+--- a/StartProcessThread.cpp
++++ b/StartProcessThread.cpp
+@@ -45,20 +45,23 @@
+ 
+ #	include <sys/wait.h>
+ 
+ #endif
+ 
+ #include <fcntl.h>
+ 
+ #include "Starter.h"
+ 
+ #include "Logging.h"
++#ifdef __linux__
++#include "LinuxNativeLaunch.h"
++#endif
+ 
+ namespace Starter_ns {
+ //+------------------------------------------------------------------
+ /**
+  * Thread constructor
+  */
+ //+------------------------------------------------------------------
+     StartProcessThread::StartProcessThread(std::vector<NewProcess *> v_np, int level, Starter *st) {
+         for (unsigned long i = 0; i < v_np.size(); i++)
+             processes.push_back(v_np[i]);
+@@ -124,21 +127,21 @@ namespace Starter_ns {
+             if (process_util->is_server_running(servname))
+                 continue;
+ 
+             ServerStatus status;
+             status.servname = servname;
+             status.process = processes[i];
+             status.fork_time = time(nullptr);
+             status.started = false;
+             status.failed = false;
+             status.timed_out = false;
+-            start_process(processes[i]);
++            status.failed = !start_process(processes[i]);
+ 
+             if (starter->enableParallelStartup) {
+                 pending.push_back(status);
+                 if (thread_level > 0 && i < processes.size() - 1 &&
+                     starter->interStartupServerWait > 0) {
+                     ms_sleep(starter->interStartupServerWait)
+                 }
+             } else {
+                 while (!poll_status(status))
+                     ms_sleep(1000)
+@@ -179,27 +182,63 @@ namespace Starter_ns {
+             delete[] processes[i]->instanceName;
+             delete[] processes[i]->adminName;
+             delete[] processes[i]->logFileName;
+             delete processes[i];
+         }
+ 
+         //	remove in level std::vector to start another level
+         starter->start_proc_data->remove_level(thread_level);
+     }
+ 
+-#ifndef    _TG_WINDOWS_
++#ifdef __linux__
++    bool StartProcessThread::start_process(NewProcess *process) {
++        // Database access, allocations, log rotation and resource preparation all
++        // happen in this thread, before either fork. No proxy to the target server.
++        auto report = [&](const std::string &detail) {
++            std::string message = std::string("Native launch failed for ") + process->adminName + ": " + detail;
++            std::ofstream log(process->logFileName, std::ios::app);
++            log << message << std::endl;
++            std::cerr << message << std::endl;
++            starter->util->log_starter_info(message);
++        };
++        try {
++            starter->util->manage_log_file_history(process->logFileName, starter->keepLogFiles);
++            auto *database = Tango::Util::instance()->get_database();
++            std::vector<std::string> names;
++            // Query the name as well as the value: an empty existing property is
++            // invalid, whereas an absent property preserves native behaviour.
++            auto property_names = database->get_device_property_list(process->adminName, "NativeLaunchProfile");
++            property_names >> names;
++            std::vector<std::string> profile;
++            if (!names.empty()) {
++                Tango::DbData data;
++                data.push_back(Tango::DbDatum("NativeLaunchProfile"));
++                database->get_device_property(process->adminName, data);
++                data[0] >> profile;
++            }
++            linux_native_launch(process->serverName, process->instanceName, process->logFileName,
++                                names.empty() ? nullptr : &profile);
++            return true;
++        } catch (const Tango::DevFailed &error) {
++            report(error.errors.length() ? error.errors[0].desc.in() : "database profile lookup failed");
++        } catch (const std::exception &error) {
++            report(error.what());
++        }
++        return false;
++    }
++#elif !defined(_TG_WINDOWS_)
+ //+------------------------------------------------------------------
+ /**
+  *	Start one process
+  */
+ //+------------------------------------------------------------------
+-    void StartProcessThread::start_process(NewProcess *process) {
++    bool StartProcessThread::start_process(NewProcess *process) {
+         char *argv[4];
+         int i = 0;
+         argv[i++] = process->serverName;
+         argv[i++] = process->instanceName;
+         //argv[i++] = "-v5";
+         argv[i] = nullptr;
+ 
+         //	Fork a child process to start the device server
+         int fork_id = fork();
+         switch (fork_id) {
+@@ -252,40 +291,42 @@ namespace Starter_ns {
+                         //TANGO_LOG_INFO << fork_id << " exit()" << std::endl;
+                         _exit(0);
+                 }
+                 break;
+ 
+             default:
+                 int res_wait;
+                 wait(&res_wait);
+                 break;
+         }
++        return fork_id >= 0;
+     }
+ 
+ 
+ #else	//	_TG_WINDOWS_
+ 
+ 
+     //+----------------------------------------------------------
+     //	WIN 32 methods to fork a sub process
+     //+----------------------------------------------------------
+-    void StartProcessThread::start_process(NewProcess *process)
++    bool StartProcessThread::start_process(NewProcess *process)
+     {
+         /*****
+         On Win32 problem with permission denied !
+         It seems that this not necessary because there is nothing in file.
+ 
+         starter->util->manage_log_file_history(
+                 process->logfile, starter->keepLogFiles);
+         */
+         StartWinThread	*win_thread = new StartWinThread(process, starter);
+         win_thread->start();
++        return true;
+     }
+ 
+     //+------------------------------------------------------------------
+     /**
+      *	Set the path between cotes for windows.
+      *
+      *      @param  serverName	server name
+      */
+     //+------------------------------------------------------------------
+     std::string StartWinThread::get_server_name_with_cotes(std::string serverName)
+diff --git a/Starter.h b/Starter.h
+index 171f12d..bb71e92 100644
+--- a/Starter.h
++++ b/Starter.h
+@@ -523,18 +523,18 @@ public:
+  */
+ 	StartProcessThread(std::vector<NewProcess *> v_np, int level, Starter *st);
+ /**
+  * Execute the fork of the sub process in a thread.
+  */
+ 	void run(void *);
+ 	//void start() {start_undetached();}
+ /**
+  *	Start one process
+  */
+-	void start_process(NewProcess *);
++	bool start_process(NewProcess *);
+ };
+ 
+ 	/*----- PROTECTED REGION END -----*/	//	Starter::Additional Classes Definitions
+ 
+ }	//	End of namespace
+ 
+ #endif   //	Starter_H
+diff --git a/docs/native-launch-profile.md b/docs/native-launch-profile.md
+new file mode 100644
+index 0000000..6f78384
+--- /dev/null
++++ b/docs/native-launch-profile.md
+@@ -0,0 +1,186 @@
++# Native Linux launch profiles
++
++Starter reads the **device property `NativeLaunchProfile` of
++`dserver/<executable>/<instance>`**, directly through its Tango database
++connection. It does not contact the destination server. For example,
++`dserver/NativeProfileProbe/a` and `dserver/NativeProfileProbe/b` own independent
++profiles. This is neither a Starter property nor a class or free-object property.
++Database lookup happens on every launch, including automatic restarts.
++
++The property is an array of six strings. Each string is exactly `key=value`;
++values are used literally, without trimming, comments or quoting. All keys are required; unknown or
++duplicate keys, empty values and unsupported versions fail the launch.
++
++```python
++import tango
++
++db = tango.Database()  # TANGO_HOST selects this machine's database
++db.put_device_property("dserver/MyServer/instance", {
++    "NativeLaunchProfile": [
++        "version=1",
++        "cgroup=/sys/fs/cgroup/fast-servers.slice/consumer-a",
++        "cpus=4-7",
++        "numa_node=0",
++        "scheduler=fifo",
++        "priority=20",
++    ]
++})
++```
++
++The path and CPU numbers above are illustrative, not an active FAST profile.
++
++| Field | Meaning |
++| --- | --- |
++| `version` | Exactly `1`. |
++| `cgroup` | Absolute path to an existing cgroup v2 domain directory. |
++| `cpus` | Linux CPU list, e.g. `4-7,12,14-15`. Numbers must be below `CPU_SETSIZE` (normally 1024). Resolve a CCD to its CPU list when provisioning the profile. |
++| `numa_node` | One decimal NUMA node, 0–4095, used with `MPOL_BIND` for private allocations. |
++| `scheduler` | `other`, `fifo` or `rr`. |
++| `priority` | Decimal scheduling priority: 0 for `other`, 1–99 for `fifo`/`rr`, checked against the kernel's scheduler range. |
++
++An **absent property** preserves inherited CPU, NUMA and scheduling policies and
++does not move the process into a new cgroup. An existing empty property is an
++error. Database access failures also fail the launch. Delete the property
++explicitly to restore native inheritance:
++
++```python
++db.delete_device_property("dserver/MyServer/instance", ["NativeLaunchProfile"])
++```
++
++## Cgroup and memory prerequisites
++
++Provision the cgroups before starting servers, under a hierarchy compatible with
++systemd ownership/delegation. Starter does not create groups, enable controllers,
++change cpusets, alter permissions or move itself. The target must be a `domain`
++cgroup with the cpuset controller available. Its `cpuset.cpus.effective` must
++equal `cpus`; a larger cpuset would allow a library to widen affinity beyond the
++requested CPUs. The CPU list must be nonempty and supported by the host.
++
++`cpuset.mems.effective` must contain `numa_node`, but may contain additional
++nodes. For example, allow nodes `0-1` in the cgroup while binding new private
++allocations to node `0`. This preserves access to shared realtime regions on
++node `1`. Starter sets a process allocation policy; it does not migrate existing
++shared mappings or change the cgroup's allowed memory nodes. File-backed shared
++code/library placement remains the responsibility of machine preparation.
++
++The Starter identity must be able to open and write the target `cgroup.procs` and
++have permission to migrate its child out of the inherited group (including the
++common ancestor restrictions of cgroup v2). Opening `cgroup.procs` alone does not
++guarantee migration permission: the actual write is checked in the child. The
++kernel must permit `set_mempolicy` and the requested scheduling policy/priority;
++realtime priorities require the applicable `RLIMIT_RTPRIO` or `CAP_SYS_NICE`.
++Seccomp or other security policy can also reject these syscalls.
++
++## Launch and errors
++
++Single `DevStart`, `DevStartAll`, startup levels at Starter boot and crash
++restarts all reach the same Linux native launcher. In the calling thread it
++reads and validates the profile, opens cgroup resources, rotates and opens logs,
++copies the environment and prepares arguments and a close-on-exec error pipe.
++The detached child performs only the minimal syscall sequence:
++
++1. Write `0` to the opened `cgroup.procs` (move only itself).
++2. Apply CPU affinity and check that the kernel accepted the exact mask.
++3. Bind private allocations to the requested NUMA node.
++4. Set scheduling policy and priority.
++5. `execve` the actual server, so its ELF loader also starts with these policies.
++
++The existing double-fork lifetime is retained; there is no new launcher service
++or supervisor. The second fork uses a raw Linux syscall to avoid running
++application `pthread_atfork` handlers in the child. No Tango, logging, C++ heap
++allocation or log rotation occurs between fork and exec. Starter's threads retain
++their own policies. Executable text files without a shebang retain the historic
++`/bin/sh` fallback, under the same applied policies.
++
++Any preparation, fork, cgroup, affinity, NUMA, scheduling or exec error prevents
++the real application from starting. A fixed-size error pipe reports child
++failures to the calling thread. It records `Native launch failed for
++dserver/...: <operation>: <reason>` in the server stderr log and Starter's info
++log, visible with `DevReadLog("MyServer/instance")` and `DevReadLog("Starter")`.
++Database/profile validation errors are reported there too. `DevStart` remains an
++asynchronous command; its successful return does not certify exec or readiness.
++Failed launches immediately finish their startup status without waiting for a
++server startup timeout. Log-open failures remain observable in Starter's own
++log/stderr even if the server log is inaccessible.
++
++Only Linux uses this implementation. Other Unix and Windows platforms keep their
++existing native launch implementations and do not read this property.
++
++## Verification
++
++Build with the usual CMake commands, then run:
++
++```sh
++ctest --test-dir build --output-on-failure
++```
++
++The unprivileged `native_launch` test runs actual executable launches. It covers
++unprofiled exec, script compatibility, invalid profiles, unavailable/non-cgroup
++paths, exec failures, prevention of application entry on rejection, and the
++calling process's unchanged affinity and scheduling. It does not certify cgroup
++placement or Tango command routing.
++
++`NativeProfileProbe` is a test-only Tango server built with `BUILD_TESTING=ON`.
++Before Tango initialization its main writes an atomic JSON report to
++`STARTER_PROFILE_TEST_DIR/<instance>.<pid>.json` with cgroup, CPU mask, NUMA policy,
++node mask and scheduler/priority. A new thread and a forked child attempt to set
++affinity to all supported CPUs; both resulting masks are recorded. The server
++then exposes its normal Tango administrative device for Starter's readiness
++checks. The probe does not implement placement itself.
++
++For the operational integration suite, use a **disposable Tango database**, Python
++with PyTango installed, and two preconfigured cgroups with different CPU sets.
++Use the same unprivileged identity and inherited environment as Starter. Supply a
++fixture JSON file like this, replacing paths/CPUs/nodes with real test resources:
++
++```json
++{
++  "profiles": [
++    {"cgroup": "/sys/fs/cgroup/starter-test/a", "cpus": "4-7", "numa_node": 0, "scheduler": "other", "priority": 0},
++    {"cgroup": "/sys/fs/cgroup/starter-test/b", "cpus": "8-11", "numa_node": 0, "scheduler": "other", "priority": 0}
++  ],
++  "permission_failure_profile": {
++    "cgroup": "/sys/fs/cgroup/starter-test/a", "cpus": "4-7", "numa_node": 0, "scheduler": "fifo", "priority": 99
++  },
++  "permission_failure_error": "set scheduler: Operation not permitted"
++}
++```
++
++The last profile must cause a real permission rejection for the test identity;
++alternatively use a cgroup with denied access/migration and specify its expected
++error. The suite requires this fixture and does not silently skip that criterion.
++Both normal groups must permit migration and NUMA policy, and remain stable for
++the duration of the suite. A multi-node host with wider `cpuset.mems` can verify
++private binding independently from the allowed node set.
++
++For image qualification, the fixture may also specify `shared_memory_file`
++(an absolute path to a resident shared tmpfs page of at least 4096 bytes,
++starting with `F`) and `shared_memory_node` (its expected physical NUMA node).
++Prepare that page externally on the shared node before running the suite.
++The probe maps and reads it before Tango initialization and reports its node
++using `get_mempolicy(MPOL_F_NODE | MPOL_F_ADDR)`. The suite checks that the page
++stays on the shared node across launches with private binding to a different
++node. This does not replace testing the real application's shared hugepages.
++
++```sh
++python3 tests/profile_integration.py \
++  --tango-host localhost:10000 \
++  --starter build/Starter \
++  --probe build/NativeProfileProbe \
++  --fixtures /path/to/test-fixtures.json
++```
++
++The suite creates unique registrations and properties, starts Starter using a
++unique `TANGO_CLUSTER` host, and uses the existing commands for single launches,
++serial/parallel levels, automatic boot launches and a crash-triggered restart.
++It verifies distinct profiles for two instances, property reload on restart,
++thread/child confinement, invalid-profile and unreachable-cgroup failures and
++the supplied permission failure. It deletes its database registrations and
++terminates its test processes on exit, retaining logs/reports in the printed
++temporary directory. `DEBUG=true` bypasses Starter's hostname check for this
++isolated fixture and makes `AutoRestartDuration` use seconds.
++
++The integration suite needs an environment that allows cgroup migration and
++NUMA policy. Passing the unprivileged CTest alone does not satisfy these
++operational acceptance criteria. Image provisioning and the final FAST hardware
++verification are handled separately from this Starter change.
+diff --git a/tests/NativeProfileProbe.cpp b/tests/NativeProfileProbe.cpp
+new file mode 100644
+index 0000000..ecef9aa
+--- /dev/null
++++ b/tests/NativeProfileProbe.cpp
+@@ -0,0 +1,168 @@
++#include "../Utils.h"
++
++#include <cerrno>
++#include <cstdlib>
++#include <fstream>
++#include <fcntl.h>
++#include <iostream>
++#include <linux/mempolicy.h>
++#include <sched.h>
++#include <stdexcept>
++#include <sys/syscall.h>
++#include <sys/mman.h>
++#include <sys/wait.h>
++#include <thread>
++#include <unistd.h>
++
++namespace {
++std::string cpus(const cpu_set_t &mask) {
++    std::string result = "[";
++    for (int cpu = 0; cpu < CPU_SETSIZE; ++cpu) {
++        if (!CPU_ISSET(cpu, &mask)) continue;
++        if (result.size() > 1) result += ',';
++        result += std::to_string(cpu);
++    }
++    return result + "]";
++}
++cpu_set_t affinity() {
++    cpu_set_t mask{};
++    if (sched_getaffinity(0, sizeof(mask), &mask)) throw std::runtime_error("sched_getaffinity");
++    return mask;
++}
++
++void snapshot(const char *instance) {
++    const char *directory = std::getenv("STARTER_PROFILE_TEST_DIR");
++    if (!directory) throw std::runtime_error("STARTER_PROFILE_TEST_DIR is required");
++    auto initial = affinity();
++    sched_param priority{};
++    if (sched_getparam(0, &priority)) throw std::runtime_error("sched_getparam");
++    int scheduler = sched_getscheduler(0);
++    int memory_policy = -1;
++    unsigned long nodes[4096 / (sizeof(unsigned long) * 8)]{};
++    if (syscall(SYS_get_mempolicy, &memory_policy, nodes, 4096, nullptr, 0) < 0)
++        throw std::runtime_error("get_mempolicy failed: " + std::to_string(errno));
++    std::string private_nodes = "[";
++    for (unsigned node = 0; node < 4096; ++node) {
++        unsigned bits = sizeof(unsigned long) * 8;
++        if (!(nodes[node / bits] & (1UL << (node % bits)))) continue;
++        if (private_nodes.size() > 1) private_nodes += ',';
++        private_nodes += std::to_string(node);
++    }
++    private_nodes += ']';
++    // Optional image-integration fixture: an already populated shared tmpfs
++    // page on node 1. Mapping it under private MPOL_BIND(0) must retain node 1.
++    int shared_node = -1;
++    if (const char *shared_file = std::getenv("STARTER_PROFILE_SHARED_FILE")) {
++        int fd = open(shared_file, O_RDONLY);
++        if (fd < 0) throw std::runtime_error("open shared fixture");
++        void *page = mmap(nullptr, 4096, PROT_READ, MAP_SHARED, fd, 0);
++        close(fd);
++        if (page == MAP_FAILED) throw std::runtime_error("mmap shared fixture");
++        if (static_cast<const volatile char *>(page)[0] != 'F')
++            throw std::runtime_error("shared fixture must start with F");
++        if (syscall(SYS_get_mempolicy, &shared_node, nullptr, 0, page, MPOL_F_NODE | MPOL_F_ADDR) < 0)
++            throw std::runtime_error("get shared fixture NUMA node");
++        munmap(page, 4096);
++    }
++    std::ifstream cgroup_file("/proc/self/cgroup");
++    std::string cgroup;
++    std::getline(cgroup_file, cgroup);
++    cpu_set_t broad;
++    CPU_ZERO(&broad);
++    for (int cpu = 0; cpu < CPU_SETSIZE; ++cpu) CPU_SET(cpu, &broad);
++    cpu_set_t thread_mask{};
++    int thread_result = -1;
++    std::thread worker([&] {
++        thread_result = sched_setaffinity(0, sizeof(broad), &broad);
++        thread_mask = affinity();
++    });
++    worker.join();
++    // A separate process tries the same widening. Only syscalls after fork.
++    int pipes[2];
++    if (pipe(pipes)) throw std::runtime_error("pipe");
++    pid_t child = fork();
++    if (child < 0) throw std::runtime_error("fork");
++    struct ChildResult { int result; cpu_set_t mask; } child_result{};
++    if (child == 0) {
++        close(pipes[0]);
++        ChildResult result{};
++        result.result = sched_setaffinity(0, sizeof(broad), &broad);
++        if (sched_getaffinity(0, sizeof(result.mask), &result.mask)) _exit(1);
++        ssize_t written = write(pipes[1], &result, sizeof(result));
++        _exit(written == sizeof(result) ? 0 : 1);
++    }
++    close(pipes[1]);
++    ssize_t count = read(pipes[0], &child_result, sizeof(child_result));
++    close(pipes[0]);
++    int status;
++    if (waitpid(child, &status, 0) != child || status != 0 || count != sizeof(child_result))
++        throw std::runtime_error("child probe failed");
++    std::string filename = std::string(directory) + '/' + instance + '.' + std::to_string(getpid()) + ".json";
++    std::ofstream report(filename + ".tmp");
++    report << "{\"pid\":" << getpid() << ",\"cpus\":" << cpus(initial)
++           << ",\"scheduler\":" << scheduler << ",\"priority\":" << priority.sched_priority
++           << ",\"memory_policy\":" << memory_policy << ",\"private_nodes\":" << private_nodes
++           << ",\"shared_node\":" << shared_node
++           << ",\"cgroup\":\"" << cgroup << "\",\"thread_cpus\":" << cpus(thread_mask)
++           << ",\"child_cpus\":" << cpus(child_result.mask)
++           << ",\"thread_widen_result\":" << thread_result
++           << ",\"child_widen_result\":" << child_result.result << "}\n";
++    report.close();
++    if (rename((filename + ".tmp").c_str(), filename.c_str())) throw std::runtime_error("publish report");
++}
++
++class Probe : public Tango::DeviceImpl {
++public:
++    Probe(Tango::DeviceClass *klass, const char *name) : Tango::DeviceImpl(klass, name) { init_device(); }
++    void init_device() override { set_state(Tango::ON); }
++};
++class ProbeClass : public Tango::DeviceClass {
++public:
++    ProbeClass() : Tango::DeviceClass("NativeProfileProbe") {}
++    void command_factory() override {}
++    void device_factory(const Tango::DevVarStringArray *names) override {
++        for (unsigned i = 0; i < names->length(); ++i) {
++            auto *device = new Probe(this, (*names)[i]);
++            device_list.push_back(device);
++            export_device(device);
++        }
++    }
++};
++
++#if TANGO_VERSION >= TANGO_MAKE_VERSION(10, 3, 0)
++class ProbeDServer : public Tango::DServer {
++public:
++    using Tango::DServer::DServer;
++    void class_factory() override { add_class(new ProbeClass); }
++};
++Tango::DServer *constructor(Tango::DeviceClass *klass, const std::string &name,
++                           const std::string &desc, Tango::DevState state, const std::string &status) {
++    return new ProbeDServer(klass, name.c_str(), desc.c_str(), state, status.c_str());
++}
++#endif
++}
++
++#if TANGO_VERSION < TANGO_MAKE_VERSION(10, 3, 0)
++void Tango::DServer::class_factory() { add_class(new ProbeClass); }
++#endif
++
++int main(int argc, char **argv) {
++    if (argc < 2) return 1;
++    try {
++        // First operation in the real application, before Tango initialization.
++        snapshot(argv[1]);
++        auto *tango = Tango::Util::init(argc, argv);
++#if TANGO_VERSION >= TANGO_MAKE_VERSION(10, 3, 0)
++        tango->register_dserver_constructor(&constructor);
++#endif
++        tango->server_init();
++        tango->server_run();
++        tango->server_cleanup();
++    } catch (const Tango::DevFailed &error) {
++        Tango::Except::print_exception(error);
++        return 1;
++    } catch (const std::exception &error) {
++        std::cerr << error.what() << std::endl;
++        return 1;
++    }
++}
+diff --git a/tests/native_launch.cpp b/tests/native_launch.cpp
+new file mode 100644
+index 0000000..1e14b53
+--- /dev/null
++++ b/tests/native_launch.cpp
+@@ -0,0 +1,113 @@
++#include "LinuxNativeLaunch.h"
++
++#include <chrono>
++#include <atomic>
++#include <cstdlib>
++#include <filesystem>
++#include <fstream>
++#include <iostream>
++#include <sched.h>
++#include <stdexcept>
++#include <thread>
++#include <unistd.h>
++
++namespace {
++void require(bool condition, const std::string &message) {
++    if (!condition) throw std::runtime_error(message);
++}
++std::string read(const std::string &path) {
++    std::ifstream file(path);
++    return {std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
++}
++class OtherThread {
++public:
++    explicit OtherThread(const cpu_set_t &expected) : thread([this, expected] {
++        while (!stop.load()) {
++            cpu_set_t actual{};
++            if (sched_getaffinity(0, sizeof(actual), &actual) != 0 || !CPU_EQUAL(&actual, &expected))
++                changed.store(true);
++            std::string allocation(1024, 'x');
++            std::this_thread::yield();
++        }
++    }) {}
++    ~OtherThread() { stop.store(true); thread.join(); }
++    std::atomic<bool> changed{false};
++private:
++    std::atomic<bool> stop{false};
++    std::thread thread;
++};
++}
++
++int main(int argc, char **argv) {
++    if (argc > 1 && std::string(argv[1]) == "--probe") {
++        std::cerr << "real executable entered\n";
++        return 0;
++    }
++    char directory[] = "/tmp/starter-native-test-XXXXXX";
++    if (!mkdtemp(directory)) return 1;
++    const std::string log = std::string(directory) + "/server.log";
++    try {
++        cpu_set_t before{}, after{};
++        require(sched_getaffinity(0, sizeof(before), &before) == 0, "read parent affinity");
++        OtherThread other(before);
++        int policy = sched_getscheduler(0);
++        sched_param priority{};
++        require(sched_getparam(0, &priority) == 0, "read parent priority");
++        auto rejects = [&](const char *exe, const std::vector<std::string> *profile, const char *expected) {
++            std::filesystem::remove(log);
++            bool rejected = false;
++            try { Starter_ns::linux_native_launch(exe, "--probe", log.c_str(), profile); }
++            catch (const std::runtime_error &error) {
++                rejected = std::string(error.what()).find(expected) != std::string::npos;
++                require(rejected, error.what());
++            }
++            require(rejected, "launch unexpectedly succeeded");
++            require(read(log).find("real executable entered") == std::string::npos, "failed launch executed application");
++        };
++        Starter_ns::linux_native_launch("/proc/self/exe", "--probe", log.c_str(), nullptr);
++        for (int i = 0; i < 100 && read(log).empty(); ++i)
++            std::this_thread::sleep_for(std::chrono::milliseconds(10));
++        require(read(log) == "real executable entered\n", "unprofiled launch did not exec");
++        rejects("/definitely/missing/server", nullptr, "exec:");
++        std::vector<std::string> empty;
++        rejects("/proc/self/exe", &empty, "missing NativeLaunchProfile");
++        std::vector<std::string> profile = {"version=1", "cgroup=/definitely/missing/cgroup", "cpus=0",
++            "numa_node=0", "scheduler=other", "priority=0"};
++        rejects("/proc/self/exe", &profile, "open cgroup");
++        profile[1] = std::string("cgroup=") + directory;
++        rejects("/proc/self/exe", &profile, "cgroup v2");
++        profile[5] = "priority=1";
++        rejects("/proc/self/exe", &profile, "priority is outside");
++        profile[5] = "priority=0";
++        profile[2] = "cpus=3-1";
++        rejects("/proc/self/exe", &profile, "descending index range");
++        profile[2] = "cpus=0,";
++        rejects("/proc/self/exe", &profile, "unsigned decimal");
++        profile[2] = "cpus=999999999999999999999";
++        rejects("/proc/self/exe", &profile, "out of range");
++        profile[2] = "cpus=0";
++        profile.push_back("priority=0");
++        rejects("/proc/self/exe", &profile, "duplicate");
++        profile.back() = "unknown=1";
++        rejects("/proc/self/exe", &profile, "unknown");
++        // Preserve execvp's executable-script fallback, without a child shell
++        // until after policies have been applied.
++        const std::string script = std::string(directory) + "/script";
++        { std::ofstream file(script); file << "echo script-entered >&2\n"; }
++        std::filesystem::permissions(script, std::filesystem::perms::owner_all);
++        Starter_ns::linux_native_launch(script.c_str(), "instance", log.c_str(), nullptr);
++        for (int i = 0; i < 100 && read(log).empty(); ++i)
++            std::this_thread::sleep_for(std::chrono::milliseconds(10));
++        require(read(log) == "script-entered\n", "script compatibility");
++        require(sched_getaffinity(0, sizeof(after), &after) == 0 && CPU_EQUAL(&before, &after), "parent affinity changed");
++        sched_param current{};
++        require(sched_getparam(0, &current) == 0 && sched_getscheduler(0) == policy &&
++                current.sched_priority == priority.sched_priority, "parent scheduling changed");
++        require(!other.changed.load(), "another parent thread's affinity changed");
++        std::filesystem::remove_all(directory);
++        std::cout << "Native launch: inherited policies, failure isolation and script compatibility passed\n";
++    } catch (const std::exception &error) {
++        std::cerr << error.what() << " (artifacts in " << directory << ")\n";
++        return 1;
++    }
++}
+diff --git a/tests/profile_integration.py b/tests/profile_integration.py
+new file mode 100644
+index 0000000..928fd1b
+--- /dev/null
++++ b/tests/profile_integration.py
+@@ -0,0 +1,229 @@
++#!/usr/bin/env python3
++"""Operational integration test; requires a disposable Tango database and cgroups.
++
++See docs/native-launch-profile.md. Creates only uniquely named test devices and
++server registrations; removes them on exit. Does not create or change cgroups.
++"""
++
++import argparse
++import json
++import os
++from pathlib import Path
++import signal
++import subprocess
++import tempfile
++import time
++import uuid
++
++
++def until(check, description, timeout=90):
++    deadline = time.monotonic() + timeout
++    last_error = None
++    while time.monotonic() < deadline:
++        try:
++            result = check()
++            if result:
++                return result
++        except Exception as error:
++            last_error = error
++        time.sleep(0.2)
++    raise AssertionError(f"Timeout: {description}; last error: {last_error}")
++
++
++def indices(value):
++    result = set()
++    for part in value.split(","):
++        first, _, last = part.partition("-")
++        result.update(range(int(first), int(last or first) + 1))
++    return sorted(result)
++
++
++def main():
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("--tango-host", required=True, help="DISPOSABLE database host:port")
++    parser.add_argument("--starter", required=True, type=Path)
++    parser.add_argument("--probe", required=True, type=Path)
++    parser.add_argument("--fixtures", required=True, type=Path)
++    args = parser.parse_args()
++    os.environ["TANGO_HOST"] = args.tango_host
++    import tango
++
++    fixtures = json.loads(args.fixtures.read_text())
++    profiles = fixtures["profiles"]
++    assert len(profiles) == 2 and indices(profiles[0]["cpus"]) != indices(profiles[1]["cpus"])
++    # Require explicit permission failure fixture rather than silently skipping
++    # the privilege criterion on hosts that can apply realtime scheduling.
++    denied_profile = fixtures["permission_failure_profile"]
++    denied_error = fixtures["permission_failure_error"]
++    shared_file = fixtures.get("shared_memory_file")
++    if shared_file:
++        assert Path(shared_file).is_absolute() and Path(shared_file).stat().st_size >= 4096
++        shared_node = fixtures["shared_memory_node"]
++        assert all(profile["numa_node"] != shared_node for profile in profiles)
++        os.environ["STARTER_PROFILE_SHARED_FILE"] = shared_file
++    else:
++        os.environ.pop("STARTER_PROFILE_SHARED_FILE", None)
++    for profile in profiles:
++        group = Path(profile["cgroup"])
++        assert indices((group / "cpuset.cpus.effective").read_text().strip()) == indices(profile["cpus"])
++        assert profile["numa_node"] in indices((group / "cpuset.mems.effective").read_text().strip())
++
++    db = tango.Database()
++    token = "profiletest-" + uuid.uuid4().hex[:10]
++    host = token  # TANGO_CLUSTER isolates Starter's controlled-server list.
++    starter_device = f"test/starter/{token}"
++    starter_server = f"Starter/{token}"
++    instances = [token + "a", token + "b"]
++    servers = [f"NativeProfileProbe/{instance}" for instance in instances]
++    root = Path(tempfile.mkdtemp(prefix="starter-profile-integration-"))
++    print(f"Integration artifacts: {root}", flush=True)
++    process = None
++    created = []
++    probe_pids = set()
++
++    def register(server, device, klass, level):
++        info = tango.DbDevInfo()
++        info.name, info.server, info._class = device, server, klass
++        # Register for cleanup even if a later database operation fails.
++        created.append(server)
++        db.add_server(server, [info])
++        server_info = tango.DbServerInfo()
++        server_info.name, server_info.host = server, host
++        server_info.mode, server_info.level = 1, level
++        db.put_server_info(server_info)
++
++    def set_profile(index, profile):
++        lines = ["version=1"] + [f"{key}={value}" for key, value in profile.items()]
++        db.put_device_property("dserver/" + servers[index], {"NativeLaunchProfile": lines})
++
++    def reports(index):
++        values = [json.loads(path.read_text()) for path in root.glob(instances[index] + ".*.json")]
++        probe_pids.update(value["pid"] for value in values)
++        return values
++
++    def verify(index, previous, profile):
++        values = until(lambda: reports(index) if len(reports(index)) > previous else None, "new entry report")
++        new = [value for value in values if value["pid"] not in seen[index]]
++        assert len(new) == 1, new
++        value = new[0]
++        seen[index].add(value["pid"])
++        wanted = indices(profile["cpus"])
++        assert value["cpus"] == value["thread_cpus"] == value["child_cpus"] == wanted, value
++        assert value["memory_policy"] == 2 and value["private_nodes"] == [profile["numa_node"]], value
++        if shared_file:
++            assert value["shared_node"] == shared_node, value
++        assert value["scheduler"] == {"other": 0, "fifo": 1, "rr": 2}[profile["scheduler"]], value
++        assert value["priority"] == profile["priority"], value
++        assert value["thread_widen_result"] == value["child_widen_result"] == 0, value
++        members = Path(profile["cgroup"], "cgroup.procs").read_text().split()
++        assert str(value["pid"]) in members, value
++        until(lambda: tango.DeviceProxy("dserver/" + servers[index]).ping() is not None, "probe Tango readiness")
++        return value
++
++    def start_starter():
++        nonlocal process
++        env = dict(os.environ, DEBUG="true", TANGO_CLUSTER=host, STARTER_PROFILE_TEST_DIR=str(root))
++        with (root / "starter-output.log").open("ab") as output:
++            process = subprocess.Popen([str(args.starter.resolve()), token], env=env,
++                                       stdout=output, stderr=subprocess.STDOUT)
++        until(lambda: process.poll() is None and tango.DeviceProxy(starter_device).ping() is not None,
++              "Starter readiness")
++        return tango.DeviceProxy(starter_device)
++
++    def stop_starter():
++        if process and process.poll() is None:
++            process.terminate()
++            try:
++                process.wait(timeout=10)
++            except subprocess.TimeoutExpired:
++                process.kill()
++                process.wait(timeout=10)
++
++    def stopped(index):
++        return servers[index].lower() in [name.lower() for name in starter.DevGetStopServers(False)]
++
++    def stop_all():
++        starter.DevStopAll(1)
++        for index in range(2):
++            until(lambda: stopped(index), "server stopped")
++        until(lambda: starter.state() != tango.DevState.MOVING, "startup threads finished")
++
++    def failed(profile, expected):
++        before = len(reports(0))
++        old_log = starter.DevReadLog(servers[0])
++        set_profile(0, profile)
++        starter.DevStart(servers[0])
++        until(lambda: (text := starter.DevReadLog(servers[0])) != old_log and expected in text,
++              "observable profile rejection")
++        assert len(reports(0)) == before, "rejected server entered real application"
++        until(lambda: starter.state() != tango.DevState.MOVING, "failed launch completed")
++
++    seen = [set(), set()]
++    try:
++        register(starter_server, starter_device, "Starter", 0)
++        for index, server in enumerate(servers):
++            register(server, f"test/profile/{instances[index]}", "NativeProfileProbe", 1)
++            set_profile(index, profiles[index])
++        db.put_device_property(starter_device, {
++            "StartDsPath": [str(args.probe.resolve().parent)], "LogFileHome": str(root),
++            "StartServersAtStartup": False, "AutoRestartDuration": 1,
++            "InterStartupLevelWait": 0, "InterStartupServerWait": 0,
++            "WaitForDriverStartup": 0, "EnableParallelStartup": False,
++        })
++        starter = start_starter()
++        # Single starts distinguish two instances of the same executable.
++        for index in range(2):
++            starter.DevStart(servers[index])
++            verify(index, 0, profiles[index])
++        stop_all()
++
++        # Existing level command, with both serial and parallel launch modes.
++        for parallel in (False, True):
++            db.put_device_property(starter_device, {"EnableParallelStartup": parallel})
++            starter.Init()
++            until(lambda: starter.state() != tango.DevState.MOVING, "Starter Init completed")
++            counts = [len(reports(i)) for i in range(2)]
++            starter.DevStartAll(1)
++            entries = [verify(i, counts[i], profiles[i]) for i in range(2)]
++            if parallel:
++                # Automatic crash restart must re-read the per-instance property.
++                set_profile(0, profiles[1])
++                time.sleep(6)  # exceed debug AutoRestartDuration and allow ping state update
++                os.kill(entries[0]["pid"], signal.SIGKILL)
++                verify(0, counts[0] + 1, profiles[1])
++                set_profile(0, profiles[0])
++            stop_all()
++
++        failed(dict(profiles[0], scheduler="invalid"), "scheduler must be")
++        failed(dict(profiles[0], cgroup=str(root / "missing-cgroup")), "open cgroup")
++        failed(denied_profile, denied_error)
++        set_profile(0, profiles[0])
++
++        # Automatic launch at Starter startup traverses the same native path.
++        stop_starter()
++        db.put_device_property(starter_device, {"StartServersAtStartup": True})
++        counts = [len(reports(i)) for i in range(2)]
++        starter = start_starter()
++        for index in range(2):
++            verify(index, counts[index], profiles[index])
++        stop_all()
++        print(f"PASS: single, level, parallel, crash restart, boot, confinement and errors; reports: {root}")
++    finally:
++        stop_starter()
++        # Starter's children intentionally survive its exit: clean up the probe
++        # reports' PIDs only when /proc still identifies our unique instance.
++        for index in range(2):
++            reports(index)
++        for pid in probe_pids:
++            try:
++                command = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
++                if any(instance.encode() in command for instance in instances):
++                    os.kill(pid, signal.SIGKILL)
++            except (FileNotFoundError, ProcessLookupError):
++                pass
++        for server in reversed(created):
++            db.delete_server(server)
++
++
++if __name__ == "__main__":
++    main()
