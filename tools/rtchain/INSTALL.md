@@ -5,7 +5,9 @@ Installa gli strumenti Python, le unit statiche e la barriera target, il
 generatore delle dipendenze dell'host e journald volatile con limite 128 MiB.
 Non abilita il bring-up storico. TSC, sei master ed ebpm sono integrati dal ticket 03, come descritto in
 [PRODUCERS.md](PRODUCERS.md). I dodici naff e la readiness finale del ticket
-04 sono descritti in [READINESS.md](READINESS.md); Starter resta nei ticket successivi. La sola unit prepare non avvia la catena.
+04 sono descritti in [READINESS.md](READINESS.md). Il lancio nativo di Starter,
+i gruppi delegati e i profili Tango sono descritti in [TANGO.md](TANGO.md).
+La sola unit prepare non avvia la catena.
 
 ## Configurazione dell'host
 
@@ -37,7 +39,7 @@ delle regioni condivise consumate da Tango: `AllowedMemoryNodes` non è la
 politica di allocazione privata del server. Non sono impostati vincoli di
 memoria su `system.slice`, né eseguite migrazioni globali di pagine.
 La creazione dei cgroup per istanza, i permessi di Starter e la politica NUMA
-privata appartengono al ticket 06; `tango.slice` ne predispone il confine.
+privata sono descritti in [TANGO.md](TANGO.md); `tango.slice` ne predispone il confine.
 
 `time_sync_units` elenca servizi la cui conclusione riuscita certifica la
 sincronizzazione effettiva prima del TSC, per esempio il servizio di attesa

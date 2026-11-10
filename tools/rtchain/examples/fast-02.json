@@ -794,5 +794,52 @@
       "/sys/kernel/debug/sched/fair_server/cpuREPLACE/runtime"
     ],
     "runtime_ns": "REPLACE_POSITIVE"
+  },
+  "tango_servers": {
+    "tango_host": "REPLACE:0",
+    "starter_cpus": "REPLACE",
+    "shared_memory_nodes": "0-1",
+    "profiles": [
+      {
+        "server": "catds-srv/fast02",
+        "group": "catds-srv-fast02",
+        "cpus": "REPLACE",
+        "numa_node": 0,
+        "scheduler": "other",
+        "priority": 0
+      },
+      {
+        "server": "devx-srv/dpdkmaster",
+        "group": "devx-srv-dpdkmaster",
+        "cpus": "REPLACE",
+        "numa_node": 0,
+        "scheduler": "other",
+        "priority": 0
+      },
+      {
+        "server": "devx-srv/ebpm",
+        "group": "devx-srv-ebpm",
+        "cpus": "REPLACE",
+        "numa_node": 0,
+        "scheduler": "other",
+        "priority": 0
+      },
+      {
+        "server": "tcbuf-srv/ebpm",
+        "group": "tcbuf-srv-ebpm",
+        "cpus": "REPLACE",
+        "numa_node": 0,
+        "scheduler": "other",
+        "priority": 0
+      },
+      {
+        "server": "tcbuf-srv/naff",
+        "group": "tcbuf-srv-naff",
+        "cpus": "REPLACE",
+        "numa_node": 0,
+        "scheduler": "other",
+        "priority": 0
+      }
+    ]
   }
 }
