@@ -7,6 +7,8 @@ Non abilita il bring-up storico. TSC, sei master ed ebpm sono integrati dal tick
 [PRODUCERS.md](PRODUCERS.md). I dodici naff e la readiness finale del ticket
 04 sono descritti in [READINESS.md](READINESS.md). Il lancio nativo di Starter,
 i gruppi delegati e i profili Tango sono descritti in [TANGO.md](TANGO.md).
+Starter richiede la readiness come descritto in [STARTUP.md](STARTUP.md),
+inclusa la migrazione obbligatoria dal servizio monolitico storico.
 La sola unit prepare non avvia la catena.
 
 ## Configurazione dell'host
@@ -162,5 +164,6 @@ socket dell'ambiente. Le verifiche dell'immagine e del boot restano da eseguire:
    e tick. Annotare eccezioni gestite dal kernel e misurare jitter sull'hardware.
 
 La readiness realtime è descritta in [READINESS.md](READINESS.md); la prova
-systemd → Starter → server Tango richiede ancora i ticket successivi. Il successo di questi test non certifica prestazioni
+systemd → Starter → server Tango è fornita in [STARTUP.md](STARTUP.md)
+e deve essere eseguita in VM. Il successo dei test locali non certifica prestazioni
 realtime, allocazioni fisiche NUMA o disponibilità completa del banco.

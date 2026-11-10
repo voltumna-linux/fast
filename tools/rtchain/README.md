@@ -8,6 +8,8 @@ ai ticket 02–04. Il pacchetto e la preparazione statica sono descritti in
 [PRODUCERS.md](PRODUCERS.md), i dodici naff e la readiness finale in
 [READINESS.md](READINESS.md).
 Non avvia server Tango, non ferma processi e non rimuove memoria condivisa.
+Il collegamento della readiness all'avvio nativo di Starter e il test
+systemd → Starter → server sono descritti in [STARTUP.md](STARTUP.md).
 
 Fonte di riferimento: repository `bring-updown`, commit
 `4a404f782d812036a16e3a8af42670ddd7f2cd2b`, in particolare

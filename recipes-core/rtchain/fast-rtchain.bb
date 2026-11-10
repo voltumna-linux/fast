@@ -13,6 +13,10 @@ RDEPENDS:${PN} = "python3-core python3-json python3-io \
     systemd util-linux-mount util-linux-findmnt numactl ethtool kmod pciutils \
     nfs-utils-client python3-pytango"
 
+PACKAGES =+ "${PN}-tests"
+FILES:${PN}-tests = "${libexecdir}/rtchain-tests"
+RDEPENDS:${PN}-tests = "${PN} starter-profile-tests python3-modules"
+
 do_install() {
     install -d ${D}${libexecdir}/rtchain ${D}${systemd_unitdir}/system \
         ${D}${systemd_unitdir}/system-generators ${D}${sysconfdir}/fast/hosts \
@@ -26,6 +30,11 @@ do_install() {
     sed -i -e 's|/usr/libexec|${libexecdir}|g' \
         ${D}${systemd_unitdir}/system/rtchain-*.service
     install -d ${D}${systemd_unitdir}/system/starter.service.d
+    install -m 0644 ${S}/rtchain/systemd/starter.service.d/70-realtime-ready.conf \
+        ${D}${systemd_unitdir}/system/starter.service.d/
+    # Retire the historical monolithic owner (including its After=starter).
+    # Existing /etc overrides must be retired during host migration, see STARTUP.md.
+    ln -s /dev/null ${D}${systemd_unitdir}/system/rtchain.service
     sed 's|/usr/libexec|${libexecdir}|g; s|/usr/bin/Starter|${bindir}/Starter|g' \
         ${S}/rtchain/systemd/starter.service.d/60-native-profile.conf \
         > ${D}${systemd_unitdir}/system/starter.service.d/60-native-profile.conf
@@ -40,6 +49,9 @@ do_install() {
     install -m 0644 ${S}/rtchain/PRODUCERS.md ${D}${datadir}/fast/rtchain/
     install -m 0644 ${S}/rtchain/README.md ${D}${datadir}/fast/rtchain/
     install -m 0644 ${S}/rtchain/TANGO.md ${D}${datadir}/fast/rtchain/
+    install -m 0644 ${S}/rtchain/STARTUP.md ${D}${datadir}/fast/rtchain/
+    install -d ${D}${libexecdir}/rtchain-tests
+    install -m 0755 ${S}/rtchain/tests/systemd_integration.py ${D}${libexecdir}/rtchain-tests/
 }
 
 FILES:${PN} += "${libexecdir}/rtchain ${systemd_unitdir} ${datadir}/fast/rtchain"
