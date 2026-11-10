@@ -6,7 +6,8 @@ installazione, unit statiche, lancio dei produttori e readiness appartengono
 ai ticket 02–04. Il pacchetto e la preparazione statica sono descritti in
 [INSTALL.md](INSTALL.md), TSC, sei master ed ebpm in
 [PRODUCERS.md](PRODUCERS.md), i dodici naff e la readiness finale in
-[READINESS.md](READINESS.md).
+[READINESS.md](READINESS.md). La configurazione funzionale successiva a
+Starter è descritta in [BENCH.md](BENCH.md).
 Non avvia server Tango, non ferma processi e non rimuove memoria condivisa.
 Il collegamento della readiness all'avvio nativo di Starter e il test
 systemd → Starter → server sono descritti in [STARTUP.md](STARTUP.md).
@@ -149,7 +150,7 @@ Il programma della prova dati del passo [7] del PDF è anch'esso esterno.
 Il ticket 04 integra in [READINESS.md](READINESS.md) una barriera con
 adattatore funzionale esterno obbligatorio, autonomo e verificabile;
 nessuna di queste assenze autorizza un successo implicito.
-PyTango serve solo a `smart-rescan`; la sola libreria standard basta per
+PyTango serve alle operazioni Tango successive a Starter; la sola libreria standard basta per
 prepare/live. Le verifiche di collocazione, traffico IMC, jitter e cgroup
 reali non sono dimostrate dal collaudo controllato e non diventano nuove
 funzioni di monitoraggio del prodotto.

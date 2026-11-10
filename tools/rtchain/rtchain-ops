@@ -23,8 +23,12 @@ def run(config, name, *args, env=None):
     tool = config.get('tools', {}).get(name, name)
     if not shutil.which(tool):
         raise OperationError(f'missing tool: {name} ({tool})')
-    result = subprocess.run([tool, *map(str, args)], text=True, stdout=subprocess.PIPE,
-                            stderr=subprocess.STDOUT, env=env)
+    try:
+        result = subprocess.run([tool, *map(str, args)], text=True, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, env=env,
+                                timeout=config.get('command_timeout'))
+    except subprocess.TimeoutExpired as error:
+        raise OperationError(f'{name}: command timed out') from error
     if result.returncode:
         raise OperationError(f'{name}: exit {result.returncode}: {result.stdout.strip()}')
     return result.stdout.strip()
