@@ -51,6 +51,7 @@ do_install() {
     install -m 0644 ${S}/rtchain/TANGO.md ${D}${datadir}/fast/rtchain/
     install -m 0644 ${S}/rtchain/BENCH.md ${D}${datadir}/fast/rtchain/
     install -m 0644 ${S}/rtchain/STARTUP.md ${D}${datadir}/fast/rtchain/
+    install -m 0644 ${S}/rtchain/COLLAUDO.md ${D}${datadir}/fast/rtchain/
     install -d ${D}${libexecdir}/rtchain-tests
     install -m 0755 ${S}/rtchain/tests/systemd_integration.py ${D}${libexecdir}/rtchain-tests/
 }
