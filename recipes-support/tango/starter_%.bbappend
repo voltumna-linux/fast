@@ -2,7 +2,7 @@
 # as a patch rather than asking BitBake to fetch an unpublished local commit.
 FILESEXTRAPATHS:prepend := "${THISDIR}/files:"
 SRCREV = "11145e1d0717971b4d37c74055b305679f2c853c"
-S = "${UNPACKDIR}/git"
+
 SRC_URI:remove = "file://02-starter-stdout.patch"
 SRC_URI:append = " file://0001-native-launch-profiles.patch"
 PR:append = ".fastnative1"
