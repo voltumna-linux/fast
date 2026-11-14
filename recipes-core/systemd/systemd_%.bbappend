@@ -3,6 +3,7 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/files:"
 SRC_URI:append = " \
 	file://force-irq-affinity \
 	file://force-irq-affinity.service \
+	file://90-fast-affinity.conf \
 	"
 
 FILES:${PN}:append = " ${base_sbindir}/force-irq-affinity"
@@ -19,4 +20,6 @@ do_install:append() {
 	ln -sf ${systemd_unitdir}/system/force-irq-affinity.service \
 		${D}${sysconfdir}/systemd/system/multi-user.target.wants/force-irq-affinity.service
 
+	install -D -m 0644 ${UNPACKDIR}/90-fast-affinity.conf \
+		${D}${sysconfdir}/systemd/system.conf.d/90-fast-affinity.conf
 }
