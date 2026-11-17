@@ -5,5 +5,6 @@ IMAGE_INSTALL:append = " os-install hwloc dmidecode \
         turbostat rt-tests iputils-ping iputils-arping \
         net-snmp-client net-snmp-mibs python3-netsnmp perf \
         libgccjit muparserx libtcc python3-scipy cpunoise \
-        dpdk dpdk-tools fast-rtchain"
+        dpdk dpdk-tools"
 
+IMAGE_INSTALL:append:d-9755-h14dsh = " fast-rtchain"
